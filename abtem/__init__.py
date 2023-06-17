@@ -6,6 +6,7 @@ from abtem.visualize.mpl import show_atoms
 from abtem.potentials import Potential, PotentialArray
 from abtem.scan import GridScan, LineScan
 from abtem.temperature import AbstractFrozenPhonons, FrozenPhonons, MDFrozenPhonons
+from abtem.magnon import AbstractMagnonInput, DummyMagnonInput, MagnonInput
 from abtem.transfer import CTF
 from abtem.waves import PlaneWave, Probe, SMatrix, Waves, FresnelPropagator
 from abtem.measure import Measurement

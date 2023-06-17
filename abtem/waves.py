@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
+import scipy.special as sp
+from scipy import interpolate
+
 from abtem.base_classes import Grid, Accelerator, cache_clear_callback, Cache, cached_method, \
     HasGridMixin, HasAcceleratorMixin, HasEventMixin, AntialiasFilter, Event, HasBeamTiltMixin, BeamTilt, \
     AntialiasAperture, HasAntialiasAperture
@@ -114,15 +117,58 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
 
     pbar.reset()
     if max_batch == 1:
-        for start, end, t in potential.generate_transmission_functions(energy=waves.energy, max_batch=1):
+        # JCDN t is the transfer function pre calculated, changed generate_transmission_functions to
+        # also yield the potential slice and store it in p
+        #wave_final=Waves(np.zeros((waves.gpts[0], waves.gpts[1]), dtype=np.complex64), extent=waves.extent, energy=waves.energy)
+        #wave_final=wave_final.intensity()
+        #Waves(np.zeros((waves.gpts[0], waves.gpts[1]), dtype=np.complex64), extent=waves.extent, energy=waves.energy)
+        #waves_save=copy(waves)
+        
 
-            if transposed:
-                waves = propagator.propagate(waves, t.thickness)
-                waves = t.transmit(waves)
-            else:
-                waves = t.transmit(waves)
-                waves = propagator.propagate(waves, t.thickness)
-            pbar.update(1)
+        # JCDN inelastic_layer should be an input from multislice, so it is easier to change, (every loop will call multislice, but potential
+        # shoul be called only once).
+        
+        if potential.mag_variables.eVals_full is not None:
+            for current_inelastic in potential.mag_variables.inelastic_layer:
+                #print('current_inelastic',current_inelastic)
+                #waves=copy(waves_save)
+                for start, end, t ,p in potential.generate_transmission_functions(energy=waves.energy, max_batch=1):
+                    #print(start, end)
+                    if transposed:
+                        waves = propagator.propagate(waves, t.thickness)
+                        waves = t.transmit(waves)
+                    
+                    else:
+                        #print(waves._array)
+                        #print(potential.eVals_full)
+                        #print(waves._array)
+                        #print(potential.mag_variables.inelastic_layer)
+                        
+                        if start==current_inelastic:
+                            #print(current_inelastic)
+                            #print(type(p))
+                            #print(type(potential))
+                            waves = potential.magnon_inelastic(waves,current_inelastic)
+                        waves = t.transmit(waves)
+                        waves = propagator.propagate(waves, t.thickness)
+
+                        
+                    pbar.update(1)
+            #    wave_final += waves.intensity()
+            #waves=Waves(wave_final, extent=waves.extent, energy=waves.energy)
+        else:
+            for start, end, t ,p in potential.generate_transmission_functions(energy=waves.energy, max_batch=1):
+                    #print(start, end)
+                    if transposed:
+                        waves = propagator.propagate(waves, t.thickness)
+                        waves = t.transmit(waves)
+                    
+                    else:
+                        waves = t.transmit(waves)
+                        waves = propagator.propagate(waves, t.thickness)
+
+                        
+                    pbar.update(1)
     else:
         for start, end, t_chunk in potential.generate_transmission_functions(energy=waves.energy, max_batch=max_batch):
             for _, __, t_slice in t_chunk.generate_slices(max_batch=1):
@@ -564,7 +610,7 @@ class Waves(_WavesLike):
             if isinstance(potential, AbstractPotentialBuilder):
                 if potential.precalculate:
                     potential = potential.build(pbar=pbar)
-
+                
             exit_wave = _multislice(self, potential, propagator, pbar, max_batch=max_batch_potential)
 
             if detector:
@@ -707,6 +753,151 @@ class PlaneWave(_WavesLike):
         """Make a copy."""
         return copy(self)
 
+class VortexBeam(_WavesLike):
+    """
+    Vortex Beam object
+
+    The vortex beam object is used for building vortex beam.
+
+    Parameters
+    ----------
+    extent : two float
+        Lateral extent of wave function [Å].
+    gpts : two int
+        Number of grid points describing the wave function.
+    sampling : two float
+        Lateral sampling of wave functions [1 / Å].
+    energy : float
+        Electron energy [eV].
+    tilt : two floats
+        Small angle beam tilt [mrad].
+    device : str
+        The vortex beam will be build on this device.
+    """
+
+    def __init__(self,
+                 extent: Union[float, Tuple[float, float]] = None,
+                 gpts: Union[int, Tuple[int, int]] = None,
+                 sampling: Union[float, Tuple[float, float]] = None,
+                 energy: float = None,
+                 winding_num: int = 1,
+                 tilt: Tuple[float, float] = None,
+                 semiangle_cutoff: float = 0.5,
+                 device: str = 'cpu'):
+        self._grid = Grid(extent=extent, gpts=gpts, sampling=sampling)
+        self._accelerator = Accelerator(energy=energy)
+        self._beam_tilt = BeamTilt(tilt=tilt)
+        self._antialias_aperture = AntialiasAperture()
+        self._device = device
+        self._winding_num=winding_num
+        self._semiangle_cutoff=semiangle_cutoff
+
+    def multislice(self,
+                   potential: Union[AbstractPotential, Atoms],
+                   pbar: bool = True,
+                   max_batch_potential: int = 1) -> Waves:
+        """
+        Build plane wave function and propagate it through the potential. The grid of the two will be matched.
+
+        Parameters
+        ----------
+        potential : Potential or Atoms object
+            The potential through which to propagate the wave function.
+        pbar : bool, optional
+            Display a progress bar. Default is True.
+
+        Returns
+        -------
+        Waves object
+            Wave function at the exit plane of the potential.
+        """
+
+        if isinstance(potential, Atoms):
+            potential = Potential(atoms=potential)
+        potential.grid.match(self)
+
+        return self.build().multislice(potential, pbar=pbar, max_batch_potential=max_batch_potential)
+
+    def build(self) -> Waves:
+        """Build the plane wave function as a Waves object."""
+        xp = get_array_module_from_device(self._device)
+        self.grid.check_is_defined()
+        
+        ## Set the array that will hold the Vortex 2D array
+        array = np.zeros([self.gpts[0],self.gpts[1]],dtype=complex)
+        
+     ######## Vortex Probe ########
+
+        vortex = self._winding_num#VortexBeam.winding_num
+
+        rangeR = self.extent[0]/np.sqrt(2)
+        R = np.linspace(0, rangeR, 1002)
+        nR=len(R)
+
+        # Electron charge (Coulomb)
+        electronCharge=1.6e-19         
+
+        h= 6.6256E-34                    #planks constant  J*s
+        C = 299790000                    #light speed
+        M0 = 9.1091E-31                  #electron mass
+        E0 = M0 * C * C                  # Rest energy (Einstein)
+        E = self.energy * electronCharge # Electron energy in J
+
+        lambd  = (h * C) / np.sqrt((2 * E * E0) + E**2) * 1e10 # Electron Wave lenght in A
+
+        #print(lambd)
+
+        k_alpha=self._semiangle_cutoff/ lambd
+
+        #print(k_alpha)
+
+        k_step=k_alpha/101
+        kobj = np.linspace(0, k_alpha, 1002)
+        nK=len(kobj)
+
+        wave=np.zeros([nR])
+
+        kobj= kobj[..., None]
+
+        wave = np.sum(np.matmul(sp.jv(vortex,2*np.pi*np.outer(kobj.reshape(-1, 1),R)),kobj*k_step),axis=1)       
+
+        #### Set the psi_probe ######
+
+        pixelX = self.extent[0]/self.gpts[0]
+        pixelY = self.extent[1]/self.gpts[1]
+
+        f=interpolate.interp1d(R, wave, kind='cubic')
+
+        a=np.linspace(0,self.gpts[0]-1,self.gpts[0])
+        b=np.linspace(0,self.gpts[1]-1,self.gpts[1]) 
+
+        xpos = np.tile((((a+1)-0.5)*pixelX) - (self.extent[0]/2),(len(a),1))
+
+        ypos = np.tile((((b+1)-0.5)*pixelY) - (self.extent[1]/2),(len(b),1)).T
+
+        Rdist=np.sqrt(xpos**2 + ypos**2)
+
+        phase=np.arctan2(ypos,xpos)
+        phase= np.where(phase < 0, 2*np.pi + phase, phase)
+
+        psi_probe = 2*np.pi*((1.0j)**vortex)*np.exp(1.0j*vortex*phase)*f(Rdist)
+
+        temp= psi_probe*np.conj(psi_probe)
+        norm=np.sum(np.sum(temp))*((pixelX)**2)
+
+        array=psi_probe/np.sqrt(norm)        
+         
+        #array = xp.ones((self.gpts[0], self.gpts[1]), dtype=xp.complex64)
+        # array = array / np.sqrt(np.prod(array.shape))
+
+        return Waves(array, extent=self.extent, energy=self.energy)
+
+    def __copy__(self, a) -> 'VortexBeam':
+        return self.__class__(extent=self.extent, gpts=self.gpts, sampling=self.sampling, energy=self.energy, winding_num=self.winding_num)
+
+    def copy(self):
+        """Make a copy."""
+        return copy(self)
 
 def convolve_probe(probe, atoms, shape, margin, intensities):
     extent = np.diag(atoms.cell)[:2]

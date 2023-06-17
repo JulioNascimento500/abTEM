@@ -2,6 +2,7 @@
 from abc import ABCMeta, abstractmethod
 from copy import copy
 from typing import Union, Sequence, Callable, Generator, Tuple, Type
+from collections import namedtuple
 
 import h5py
 import numpy as np
@@ -19,6 +20,7 @@ from abtem.parametrizations import lobato, dvdr_lobato, load_lobato_parameters
 from abtem.structures import is_cell_orthogonal, SlicedAtoms, pad_atoms, rotate_atoms_to_plane, orthogonalize_cell
 from abtem.tanh_sinh import integrate, tanh_sinh_nodes_and_weights
 from abtem.temperature import AbstractFrozenPhonons, DummyFrozenPhonons
+from abtem.magnon import AbstractMagnonInput, DummyMagnonInput
 from abtem.utils import energy2sigma, ProgressBar, generate_batches, _disc_meshgrid
 import warnings
 
@@ -28,6 +30,14 @@ eps0 = units._eps0 * units.A ** 2 * units.s ** 4 / (units.kg * units.m ** 3)
 # Conversion factor from unitless potential parametrizations to ASE potential units
 kappa = 4 * np.pi * eps0 / (2 * np.pi * units.Bohr * units._e * units.C)
 
+# Permeability of free space   1.26e-6  (N/A^2)
+mu0=units._mu0
+
+# Bohr magneton (Am^2)
+muB=9.27e-24                       
+
+# Electron charge (Coulomb)
+electronCharge=1.6e-19                   
 
 class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
     """
@@ -92,7 +102,8 @@ class AbstractPotential(HasGridMixin, metaclass=ABCMeta):
             yield start, end, potential_slice.as_transmission_function(energy,
                                                                        in_place=True,
                                                                        max_batch=max_batch,
-                                                                       antialias_filter=antialias_filter)
+                                                                       antialias_filter=antialias_filter) ,potential_slice
+## jcdn500 added to the yield the potential slice
 
     @abstractmethod
     def generate_slices(self, first_slice=0, last_slice=None, max_batch=1):
@@ -229,6 +240,8 @@ class AbstractPotentialBuilder(AbstractPotential):
         PotentialArray object
         """
 
+        
+
         self.grid.check_is_defined()
 
         if last_slice is None:
@@ -272,7 +285,7 @@ class AbstractPotentialBuilder(AbstractPotential):
             pbar.close()
 
         if energy is None:
-            return PotentialArray(array, slice_thicknesses=slice_thicknesses, extent=self.extent)
+            return PotentialArray(array, slice_thicknesses=slice_thicknesses, mag_variables=self.magnon_package, extent=self.extent)
         else:
             return TransmissionFunction(array, slice_thicknesses=slice_thicknesses, extent=self.extent, energy=energy)
 
@@ -597,7 +610,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
     """
 
     def __init__(self,
-                 atoms: Union[Atoms, AbstractFrozenPhonons] = None,
+                 atoms: Union[Atoms, AbstractFrozenPhonons, AbstractMagnonInput] = None,
                  gpts: Union[int, Sequence[int]] = None,
                  sampling: Union[float, Sequence[float]] = None,
                  slice_thickness: float = .5,
@@ -638,6 +651,23 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
 
         if isinstance(atoms, AbstractFrozenPhonons):
             self._frozen_phonons = atoms
+        elif isinstance(atoms, AbstractMagnonInput):
+            '''If the calculation is of magnons, it is necessary to obtain the eigenvalues and eigenvectors
+            '''
+            self._frozen_phonons = DummyMagnonInput(atoms._atoms)
+
+            self.H, self.orientationEach = atoms.Hamiltonian_film()
+        
+            #print(self.H)
+
+            self.eVals_full,self.eVecs_fullL,self.eVecs_fullR = atoms.diagonalize_function(self.H)
+
+            self.qpts=atoms._qpts
+
+            self.Temperature=atoms.Temperature
+
+            self.inelastic_layer=atoms.inelastic_layer
+            
         else:
             self._frozen_phonons = DummyFrozenPhonons(atoms)
 
@@ -677,6 +707,23 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         self._z_periodic = z_periodic
 
         super().__init__(precalculate=precalculate, device=device, storage=storage)
+
+    
+    @property
+    def magnon_package(self):
+
+        #if isinstance(self.atoms, AbstractMagnonInput):
+        """Returns all variables required for the inelastic magnons calculation"""
+
+        package = namedtuple('package', ['atoms', 'eVals_full','eVecs_fullL','eVecs_fullR','qpts','orientationEach','Temperature','inelastic_layer'])
+
+        if hasattr(self, 'eVals_full'):
+            mag_var = package(self._atoms,self.eVals_full,self.eVecs_fullL,self.eVecs_fullR,self.qpts,self.orientationEach,self.Temperature,self.inelastic_layer)
+
+        else:
+
+            mag_var = package(self._atoms,None,None,None,None,None,None,None)
+        return mag_var
 
     @property
     def parametrization(self):
@@ -902,7 +949,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
                     array += temp
 
             slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
-            yield start, end, PotentialArray(array.real[:end - start], slice_thicknesses, extent=self.extent)
+            yield start, end, PotentialArray(array.real[:end - start], slice_thicknesses,mag_variables=self.magnon_package, extent=self.extent)
 
     def _generate_slices_finite(self, first_slice=0, last_slice=None, max_batch=1) -> Generator:
         xp = get_array_module_from_device(self._device)
@@ -972,7 +1019,7 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
             slice_thicknesses = [self.get_slice_thickness(i) for i in range(start, end)]
 
             yield start, end, PotentialArray(array[:end - start] / kappa,
-                                             slice_thicknesses,
+                                             slice_thicknesses, mag_variables=self.magnon_package,
                                              extent=self.extent)
 
     def generate_frozen_phonon_potentials(self, pbar: Union[ProgressBar, bool] = True):
@@ -1004,6 +1051,152 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
 
         pbar.refresh()
         pbar.close()
+
+    def magnon_inelastic(self,wave,numpot=1,T=300,flag_theta1=True,flag_theta2=True):
+        
+        #self.slice_thicknesses
+        
+        import sympy as sym
+        
+        omega=np.linalg.norm(np.cross(self._atoms.cell[:][0], self._atoms.cell[:][1])) * 1e-20# Was in A^2, converted to m^2
+
+        h= 6.6256E-34                    #planks constant  J*s
+        C = 299792458                    #light speed m/s
+             
+        M0 = 9.1091E-31                  #electron mass
+        E0 = M0 * C * C                  # Rest energy (Einstein)
+        E = wave.energy * electronCharge # Electron energy in J
+
+        lambd  = (h * C) / np.sqrt((2 * E * E0) + E**2) * 1e10 # Electron Wave lenght in A
+
+        kT=T*8.6173e-5
+
+        ##### Calculate Gradients
+
+
+        theta1_final=np.zeros_like(wave._array)
+        theta2_final=np.zeros_like(wave._array)
+
+        gradientX=np.gradient(wave._array,self.extent[0]* 1e-10/self.gpts[0],axis=0)  # Gradient with pixel size m
+        gradientY=np.gradient(wave._array,self.extent[1]* 1e-10/self.gpts[1],axis=1)  # Gradient with pixel size m
+
+        gradientX2=np.gradient(gradientX,self.extent[0]* 1e-10/self.gpts[0],axis=0)  # Gradient with pixel size m
+        gradientY2=np.gradient(gradientY,self.extent[1]* 1e-10/self.gpts[1],axis=1)  # Gradient with pixel size m
+
+        ##### Calculate pre-factors
+        Nt=1/omega # Already in A
+
+        N=len(self.eVals_full[0,:])//2#len(Input.atoms)
+
+        def scos(x): return sym.N(sym.cos(x))  
+        def ssin(x): return sym.N(sym.sin(x))
+
+        A=np.zeros([3,3,len(self.orientationEach)])
+
+        for numS,S in enumerate(self.orientationEach):
+            A[0,0,numS]= scos(S[1])*scos(S[2]); A[0,1,numS]=-ssin(S[2]); A[0,2,numS]=ssin(S[1])*scos(S[2]) 
+            A[1,0,numS]= scos(S[1])*ssin(S[2]); A[1,1,numS]= scos(S[2]); A[1,2,numS]=ssin(S[1])*ssin(S[2])
+            A[2,0,numS]=-ssin(S[1])           ; A[2,1,numS]= 0         ; A[2,2,numS]=scos(S[1])
+
+        potential=self._array
+
+        deltaz =self.thickness  ## in A 
+        zperp  =(deltaz*numpot) + deltaz/2  ## Already in A
+        sigmai = (np.pi/(lambd*wave.energy))  ## in 1/[A][eV]
+
+        AArray=np.array([A[0,0,:] + 1.0j*A[0,1,:],A[1,0,:] + 1.0j*A[1,1,:],A[2,0,:] + 1.0j*A[2,1,:]])
+
+        Projection1=np.sqrt(self.orientationEach[:,0])
+        
+        for numq,q in enumerate(self.qpts*(1/np.sum(self._atoms.cell,axis=0))): # converting the q to a fraction of wavevector in inverse m    *(1/np.sum(Input.aseatoms.cell,axis=0)*1e-10)
+
+            #print(q)
+
+            theta1=np.zeros_like(wave._array)
+            theta2=np.zeros_like(wave._array)
+
+            qmag=np.linalg.norm(q[:2]) * 1e-10
+            
+            #pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
+            #Projection1=np.exp(1.0j*Input.atoms[:,3].astype(float)*Input.qpts[numq,2])*np.sqrt(Input.MagMoms[:,0])
+            #Projection2=eigenVecs[:N,N:,numq]*np.sqrt(Nk) + eigenVecs[N:,N:,numq]*np.sqrt(Nk+1)
+
+            ##### Calculate occupation Numbers
+            
+            Nk1 = 1/(np.exp(np.abs(self.eigenVals[numq,:N])/kT)-1)#np.ones_like(1/(np.exp(eigenVals[numq,:]/kT)-1))   
+            Nk2 = 1/(np.exp(np.abs(self.eigenVals[numq,N:])/kT)-1)         
+            phase=np.exp(1.0j*zperp*self.qpts[numq,2])
+            
+            sigmaf = sigmai#np.pi/(((lambd)-(2*np.pi/(qmag)))*(E0))
+
+
+            # #### Version 4 ####
+            
+            Aq1 = np.cross(AArray.T,np.array([1.0j*q[0],1.0j*q[1],-2*zperp]))
+            
+            Aq2 = np.cross(AArray.T[:,:2],np.array([q[0],q[1]]))
+
+            echarge=14.4  # electron charge in V/A
+
+
+            pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
+            
+            sqrt_Nk = np.sqrt(Nk1)
+            sqrt_Nk_plus_1 = np.sqrt(Nk2 + 1)
+
+            Projection2 = (self.eigenVecs[:N, N:, numq]@(sqrt_Nk*Aq2) + self.eigenVecs[N:, N:, numq]@(sqrt_Nk_plus_1*Aq2))
+            
+            Projection2_0 = (self.eigenVecs[:N, N:, numq]@(sqrt_Nk*Aq1[:,0]) + self.eigenVecs[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,0]))
+            
+            Projection2_1 = (self.eigenVecs[:N, N:, numq]@(sqrt_Nk*Aq1[:,1]) + self.eigenVecs[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,1]))
+
+            Projection2_2 = (self.eigenVecs[:N, N:, numq]@(sqrt_Nk*Aq1[:,2]) + self.eigenVecs[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]))
+
+            #print(np.shape(Projection2_0),np.shape(Projection1))
+
+            theta1+=(Projection2_0@Projection1)*gradientX
+
+            theta1+=(Projection2_1@Projection1)*gradientY
+
+            theta1+=(Projection2_2@Projection1)*((1.0j*lambd*1e-10)/(4*np.pi))*(gradientX2+gradientY2)  #Lambd is converted back to m here
+
+            theta1*=sigmaf*phase*deltaz*pre_factor
+                            
+
+            #print('deltaz',deltaz)
+            #print('sigmai',sigmai)
+            #print('sigmaf',sigmaf)
+            #print('phase',phase)
+            #print('pre_factor',pre_factor)
+            theta2-=sigmai*sigmaf*phase*(Projection2@Projection1)*pre_factor*potential[0,:,:]*wave._array
+
+            #### Version 1 ####
+            # for MN in range(N):
+            #     for n in range(N):
+            #         pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
+
+            #         Projection1=np.sqrt(Input.MagMoms[MN,0])
+            #         Projection2=eigenVecs[n,N+MN,numq]*np.sqrt(Nk[MN]) + eigenVecs[N+n,N+MN,numq]*np.sqrt(Nk[MN]+1)
+                    
+            #         AArray=np.array([A[0,0,MN] + 1.0j*A[0,1,MN],A[1,0,MN] + 1.0j*A[1,1,MN],A[2,0,MN] + 1.0j*A[2,1,MN]])
+                    
+            #         Aq1 = np.cross(AArray,np.array([1.0j*q[0],1.0j*q[1],-2*zperp]))
+                    
+            #         theta1+=sigmaf*phase*deltaz*pre_factor*Projection1*Projection2*(Aq1[0]*gradientX + Aq1[1]*gradientY + (Aq1[2]*(1.0j*lambd/(4*np.pi))*(gradientX2+gradientY2)))
+                    
+            #         Aq2 = np.cross(AArray[:2],np.array([q[0],q[1]]))
+
+            #         theta2-=sigmai*sigmaf*phase*pre_factor*Projection1*Projection2*(Aq2)*potential[0,:,:]*wave._array
+
+            theta1_final+=theta1
+            theta2_final+=theta2
+
+        if flag_theta1:
+            wave._array=theta1_final
+        if flag_theta2:         
+            wave._array=theta2_final
+        if flag_theta1 and flag_theta2:
+            wave._array=theta1_final+theta2_final    
 
     def __copy__(self):
         return self.__class__(atoms=self.frozen_phonons.copy(),
@@ -1038,6 +1231,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
     def __init__(self,
                  array: np.ndarray,
                  slice_thicknesses: Union[float, Sequence[float]],
+                 mag_variables = None,
                  extent: Union[float, Sequence[float]] = None,
                  sampling: Union[float, Sequence[float]] = None):
 
@@ -1054,15 +1248,20 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         self._array = array
         self._slice_thicknesses = slice_thicknesses
         self._grid = Grid(extent=extent, gpts=self.array.shape[-2:], sampling=sampling, lock_gpts=True)
+        self.mag_variables = mag_variables
 
+        #if mag_variables is not None:
+        #  print(self.mag_variables)
+
+        
         super().__init__(precalculate=False)
 
     def __getitem__(self, items):
         if isinstance(items, int):
-            return PotentialArray(self.array[items][None], self._slice_thicknesses[items][None], extent=self.extent)
+            return PotentialArray(self.array[items][None], self._slice_thicknesses[items][None], mag_variables=self.magnon_package,extent=self.extent)
 
         elif isinstance(items, slice):
-            return PotentialArray(self.array[items], self._slice_thicknesses[items], extent=self.extent)
+            return PotentialArray(self.array[items], self._slice_thicknesses[items], mag_variables=self.magnon_package , extent=self.extent)
         else:
             raise TypeError('Potential must indexed with integers or slices, not {}'.format(type(items)))
 
@@ -1092,7 +1291,6 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         t = TransmissionFunction(array,
                                  slice_thicknesses=self._slice_thicknesses.copy(),
-                                 extent=self.extent,
                                  energy=energy)
 
         if antialias_filter is None:
@@ -1106,6 +1304,11 @@ class PotentialArray(AbstractPotential, HasGridMixin):
     @property
     def num_frozen_phonon_configs(self):
         return 1
+
+    def update_inelastic_layer(self,new_layer):
+        self.mag_variables = self.mag_variables._replace(inelastic_layer=new_layer)
+        return self
+
 
     def generate_frozen_phonon_potentials(self, pbar=False):
         for i in range(self.num_frozen_phonon_configs):
@@ -1215,6 +1418,168 @@ class PotentialArray(AbstractPotential, HasGridMixin):
                 datasets[key] = f.get(key)[()]
 
         return cls(array=datasets['array'], slice_thicknesses=datasets['slice_thicknesses'], extent=datasets['extent'])
+
+
+    def magnon_inelastic(self,wave,numpot,flag_theta1=True,flag_theta2=True):
+        
+        #self.slice_thicknesses
+        
+        import sympy as sym
+        
+        #print(self.mag_variables)
+
+
+        omega=np.linalg.norm(np.cross(self.mag_variables.atoms.cell[:][0], self.mag_variables.atoms.cell[:][1])) #* 1e-20# Was in A^2, converted to m^2
+
+        T=self.mag_variables.Temperature
+
+        h= 6.6256E-34                    #planks constant  J*s
+        C = 299792458                    #light speed m/s
+             
+        M0 = 9.1091E-31                  #electron mass
+        E0 = M0 * C * C                  # Rest energy (Einstein)
+        E = wave.energy * electronCharge # Electron energy in J
+
+        lambd  = (h * C) / np.sqrt((2 * E * E0) + E**2) * 1e10 # Electron Wave lenght in A
+
+        kT=T*8.6173e-5
+
+        ##### Calculate Gradients
+
+
+        theta1_final=np.zeros_like(wave._array)
+        theta2_final=np.zeros_like(wave._array)
+
+        gradientX=np.gradient(wave._array,self.extent[0]* 1e-10/self.gpts[0],axis=0)  # Gradient with pixel size m
+        gradientY=np.gradient(wave._array,self.extent[1]* 1e-10/self.gpts[1],axis=1)  # Gradient with pixel size m
+
+        gradientX2=np.gradient(gradientX,self.extent[0]* 1e-10/self.gpts[0],axis=0)  # Gradient with pixel size m
+        gradientY2=np.gradient(gradientY,self.extent[1]* 1e-10/self.gpts[1],axis=1)  # Gradient with pixel size m
+
+        ##### Calculate pre-factors
+        Nt=1/omega # Already in A
+
+        N=len(self.mag_variables.eVals_full[0,:])//2#len(Input.atoms)
+
+        def scos(x): return sym.N(sym.cos(x))  
+        def ssin(x): return sym.N(sym.sin(x))
+
+        A=np.zeros([3,3,len(self.mag_variables.orientationEach)])
+
+        for numS,S in enumerate(self.mag_variables.orientationEach):
+            A[0,0,numS]= scos(S[1])*scos(S[2]); A[0,1,numS]=-ssin(S[2]); A[0,2,numS]=ssin(S[1])*scos(S[2]) 
+            A[1,0,numS]= scos(S[1])*ssin(S[2]); A[1,1,numS]= scos(S[2]); A[1,2,numS]=ssin(S[1])*ssin(S[2])
+            A[2,0,numS]=-ssin(S[1])           ; A[2,1,numS]= 0         ; A[2,2,numS]=scos(S[1])
+
+        potential=self._array
+
+        deltaz = self._slice_thicknesses[numpot] #self.thickness  ## in A 
+
+        #print(gradientY2)
+
+        zperp  =(deltaz*numpot) + deltaz/2  ## Already in A
+        sigmai = (np.pi/(lambd*wave.energy))  ## in 1/[A][eV]
+
+        AArray=np.array([A[0,0,:] + 1.0j*A[0,1,:],A[1,0,:] + 1.0j*A[1,1,:],A[2,0,:] + 1.0j*A[2,1,:]])
+
+        Projection1=np.sqrt(self.mag_variables.orientationEach[:,0])
+
+        
+        for numq,q in enumerate(self.mag_variables.qpts*(1/np.sum(self.mag_variables.atoms.cell,axis=0))): # converting the q to a fraction of wavevector in inverse m    *(1/np.sum(Input.aseatoms.cell,axis=0)*1e-10)
+
+            #print(q,numq)
+            
+            theta1=np.zeros_like(wave._array)
+            theta2=np.zeros_like(wave._array)
+
+            qmag=np.linalg.norm(q[:2]) * 1e-10
+            
+            #pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
+            #Projection1=np.exp(1.0j*Input.atoms[:,3].astype(float)*Input.qpts[numq,2])*np.sqrt(Input.MagMoms[:,0])
+            #Projection2=eigenVecs[:N,N:,numq]*np.sqrt(Nk) + eigenVecs[N:,N:,numq]*np.sqrt(Nk+1)
+
+            ##### Calculate occupation Numbers
+            
+            Nk1 = 1/(np.exp(np.abs(self.mag_variables.eVals_full[numq,:N])/kT)-1)#np.ones_like(1/(np.exp(eigenVals[numq,:]/kT)-1))   
+            Nk2 = 1/(np.exp(np.abs(self.mag_variables.eVals_full[numq,N:])/kT)-1)         
+            #phase=np.exp(1.0j*zperp*self.mag_variables.qpts[numq,2])
+            phase=np.exp(1.0j*zperp*q[2])
+            
+
+            sigmaf = sigmai#np.pi/(((lambd)-(2*np.pi/(qmag)))*(E0))
+
+
+            # #### Version 4 ####
+            
+            Aq1 = np.cross(AArray.T,np.array([1.0j*q[0],1.0j*q[1],-2*zperp]))
+            
+            Aq2 = np.cross(AArray.T[:,:2],np.array([q[0],q[1]]))
+
+            echarge=14.4  # electron charge in V/A
+
+
+            pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
+            
+            sqrt_Nk = np.sqrt(Nk1)
+            sqrt_Nk_plus_1 = np.sqrt(Nk2 + 1)
+
+            Projection2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq2) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq2))
+            
+            Projection2_0 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq1[:,0]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,0]))
+            
+            Projection2_1 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq1[:,1]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,1]))
+
+            Projection2_2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]))
+
+            #print(np.shape(Projection2_0),np.shape(Projection1))
+
+            #print(np.shape(Projection2_0@Projection1),np.shape(gradientX))
+
+            theta1+=(Projection2_0@Projection1)*gradientX
+
+            theta1+=(Projection2_1@Projection1)*gradientY
+
+            theta1+=(Projection2_2@Projection1)*((1.0j*lambd*1e-10)/(4*np.pi))*(gradientX2+gradientY2)  #Lambd is converted back to m here
+
+            theta1*=sigmaf*phase*deltaz*pre_factor
+                            
+
+            #print('deltaz',deltaz)
+            #print('sigmai',sigmai)
+            #print('sigmaf',sigmaf)
+            #print('phase',phase)
+            #print('pre_factor',pre_factor)
+            theta2-=sigmai*sigmaf*phase*(Projection2@Projection1)*pre_factor*potential[0,:,:]*wave._array
+
+            #### Version 1 ####
+            # for MN in range(N):
+            #     for n in range(N):
+            #         pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
+
+            #         Projection1=np.sqrt(Input.MagMoms[MN,0])
+            #         Projection2=eigenVecs[n,N+MN,numq]*np.sqrt(Nk[MN]) + eigenVecs[N+n,N+MN,numq]*np.sqrt(Nk[MN]+1)
+                    
+            #         AArray=np.array([A[0,0,MN] + 1.0j*A[0,1,MN],A[1,0,MN] + 1.0j*A[1,1,MN],A[2,0,MN] + 1.0j*A[2,1,MN]])
+                    
+            #         Aq1 = np.cross(AArray,np.array([1.0j*q[0],1.0j*q[1],-2*zperp]))
+                    
+            #         theta1+=sigmaf*phase*deltaz*pre_factor*Projection1*Projection2*(Aq1[0]*gradientX + Aq1[1]*gradientY + (Aq1[2]*(1.0j*lambd/(4*np.pi))*(gradientX2+gradientY2)))
+                    
+            #         Aq2 = np.cross(AArray[:2],np.array([q[0],q[1]]))
+
+            #         theta2-=sigmai*sigmaf*phase*pre_factor*Projection1*Projection2*(Aq2)*potential[0,:,:]*wave._array
+
+            theta1_final+=theta1
+            theta2_final+=theta2
+
+        if flag_theta1:
+            wave._array=theta1_final
+        if flag_theta2:         
+            wave._array=theta2_final
+        if flag_theta1 and flag_theta2:
+            wave._array=theta1_final+theta2_final 
+    
+        return wave
 
     def transmit(self, waves, conjugate=False):
         """
