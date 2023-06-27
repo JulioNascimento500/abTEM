@@ -95,19 +95,20 @@ subroutine magnons_function(Qgrid,Egrid,plotValues,N,NMax,T,EigVecR,EigVals,exp_
 
 
         !total = total + ((conjg(dot_product(exp_sum_j(i,:),XR))*dot_product(exp_sum_j(i,:),XR))) * BD * BDning
-        ! if (i==1 .and. j==1) then
-        !   ! print *, 'EigVals', EigVals(i,k+N)
-        !   ! print *, 'omegaX', omegaX(j)
-        !   ! print *, 'BD', BD
-        !   ! print *, 'BDning', BDning
-        ! end if      
+        if (i==1 .and. j==1) then
+          print *, 'EigVals', EigVals(i,k+N)
+          print *, 'omegaX', omegaX(j)
+          print *, 'BD', BD
+          print *, 'BDning', BDning
+        end if      
       end do
       plotValues(j,i)=total
     end do
   end do
  
+  
   ! end parallel do
-
+  print *, plotValues
 contains
 
   function outer_product(A,B) result(AB)
