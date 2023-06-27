@@ -19,7 +19,7 @@ from ase.dft.kpoints import monkhorst_pack
 
 from collections.abc import Iterable
 
-from numba import njit
+from numba import njit, prange, config
 
 from ase import Atoms
 from ase.data import covalent_radii
@@ -27,8 +27,12 @@ from ase.calculators.neighborlist import NeighborList
 
 from copy import copy
 
+import os
+
 from abtem.structures import orthogonalize_cell
 from ase.build import surface
+
+
 @njit
 def boson_dist(omegaN,T):
     Kb=8.617333e-2#8.617333e-5
@@ -36,8 +40,6 @@ def boson_dist(omegaN,T):
 
     if np.isnan(boson):
         return 0+0.0j
-    # elif boson>maxval:
-    #     return np.inf
     else:
         return boson
 
@@ -48,46 +50,48 @@ def broadening(omega,omegaN,delta):
 
     return broadening
 
-
-# def scattering_function_loop(Qgrid, Egrid, plotValues, N, T, eVecsL, eVecsR, eVals, exp_sum_j, omegaX, delta, Vplus, Vminus, alpha, beta):
-#     for i in range(Qgrid):
-#         for j in range(Egrid):
-#             Total = 0
-#             BD = boson_dist(eVals[i, N:], T) + 1  # Precompute boson_dist values outside the loop
-#             broad = broadening(omegaX[j], eVals[i, N:], delta)  # Precompute broadening values outside the loop
-            
-#             for k in range(N):
-#                 XL = (Vminus[alpha, k] * eVecsL[:N, k + N, i] + Vplus[beta, k] * eVecsL[N:, k + N, i])
-#                 XR = (Vminus[alpha, k] * eVecsR[:N, k + N, i] + Vplus[beta, k] * eVecsR[N:, k + N, i])
-                
-#                 if BD[k] != 0.0 + 0.0j:
-#                     Total += np.sum(np.outer(np.conjugate(exp_sum_j[i, :] * XL), (exp_sum_j[i, :] * XL).T)) * broad[k]
-                
-#                 if i == 0 and j == 0:
-#                     print('BD', BD[k])
-#                     print('BDning', broad[k])
-                    
-#             plotValues[j, i] = Total
-            
-#     return plotValues
-@njit
+@njit(parallel=True)
 def scattering_function_loop(Qgrid,Egrid,plotValues,N,T,eVecsL,eVecsR,eVals,exp_sum_j,omegaX,delta,Vplus,Vminus,alpha,beta):
-    for i in range(Qgrid):
+    for i in prange(Qgrid):
         for j in range(Egrid):
             Total=0
             for k in range(N):
                 XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
                 XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
 
-                if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
+                #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
 
-                    Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:]*XL),(exp_sum_j[i,:]*XL).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) #*(boson_dist(eVals[i,k+N],T)+1) 
+                Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XL),(exp_sum_j[i,:]*XL).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) #*(boson_dist(eVals[i,k+N],T)+1) 
 
                 #if i==0 and j==0:
                 #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
                 #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
             plotValues[j,i]=Total
     return plotValues
+
+
+# def scattering_function_loop(Qgrid,Egrid,plotValues,N,T,eVecsL,eVecsR,eVals,exp_sum_j,omegaX,delta,Vplus,Vminus,alpha,beta):
+        
+#         exp_sum_j=exp_sum_j.T
+#         for j in range(Egrid):
+#             Total=np.zeros([49],dtype=complex)
+#             for k in range(N):
+#                 XL = (Vminus[alpha,k]*eVecsL[:N,k+N,:] + Vplus[beta,k]*eVecsL[N:,k+N,:])
+#                 XR = (Vminus[alpha,k]*eVecsR[:N,k+N,:] + Vplus[beta,k]*eVecsR[N:,k+N,:])    
+
+#                 #print('shape of XL:',np.shape(XL))
+#                 #print('exp_sum_j:',np.shape(exp_sum_j))
+
+#                 Total+=np.sum(np.outer(np.conjugate(exp_sum_j*XL),(exp_sum_j*XL).T)) *  broadening(omegaX[j],eVals[:,k+N],delta) #*(boson_dist(eVals[i,k+N],T)+1) 
+
+#                 #if i==0 and j==0:
+#                 #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
+#                 #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
+#             plotValues[j,:]=Total
+#         return plotValues
+
+
+
 
 def cleanup(array):
     error_array=np.finfo(float).eps * np.sqrt(np.sum(array**2))
@@ -533,7 +537,7 @@ class MagnonInput(AbstractMagnonInput):
 
   def Hamiltonian(self,Lists_of_Neigbours=None,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
 
-    print('In')
+    
     if Lists_of_Neigbours==None:
         Lists_of_Neigbours=self.get_neigb(step_size)
 
@@ -883,7 +887,7 @@ class MagnonInput(AbstractMagnonInput):
   
   
       for i in range(len(hamiltonian[0,0,:])):
-          print('In')
+          
           eVals,eVecsL,eVecsR =  eig(hamiltonian[:,:,i], left=True, right=True)
           idx = eVals.argsort()[::1] 
           
@@ -896,7 +900,7 @@ class MagnonInput(AbstractMagnonInput):
           eVecs_fullL[:,:,i]=eVecsL
           eVecs_fullR[:,:,i]=eVecsR      
   
-      print('out')
+      
       return eVals_full,eVecs_fullL,eVecs_fullR    
 
   def spin_scattering_function(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1):
@@ -932,7 +936,7 @@ class MagnonInput(AbstractMagnonInput):
 
     return SpinSpin
 
-  def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1):
+  def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,num_processors=1):
     
     Directions=['x','y','z']
 
@@ -942,6 +946,11 @@ class MagnonInput(AbstractMagnonInput):
     N = len(eVals_full[0,:])//2
     N1 = len(self.zNum)
     Qgrid = len(self._qpts)
+
+    # Set the number of processors
+    os.environ["NUMBA_NUM_THREADS"] = str(num_processors)
+    config.NUMBA_NUM_THREADS = num_processors
+
 
     omegaX=np.linspace(Emin,Emax,Estep,dtype=complex)
 

@@ -89,8 +89,8 @@ subroutine magnons_function(Qgrid,Egrid,plotValues,N,NMax,T,EigVecR,EigVals,exp_
 
         if (BDning .ne. complex(0.0,0.0)) then
 
-          total = total + (sum(outer_product(conjg(exp_sum_j(i,:)*XR),exp_sum_j(i,:)*XR)) * BD * BDning)
-
+          !total = total + (sum(outer_product(conjg(exp_sum_j(i,:)*XR),exp_sum_j(i,:)*XR)) * BD * BDning)
+          total = total + ((conjg(dot_product(exp_sum_j(i,:),XR))*dot_product(exp_sum_j(i,:),XR))) * BD * BDning
         end if
 
 
