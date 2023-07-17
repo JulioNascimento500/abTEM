@@ -51,22 +51,41 @@ def broadening(omega,omegaN,delta):
     return broadening
 
 @njit(parallel=True)
-def scattering_function_loop(Qgrid,Egrid,plotValues,N,T,eVecsL,eVecsR,eVals,exp_sum_j,omegaX,delta,Vplus,Vminus,alpha,beta):
-    for i in prange(Qgrid):
-        for j in range(Egrid):
-            Total=0
-            for k in range(N):
-                XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
-                XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
+def scattering_function_loop(Qgrid,Egrid,plotValues,N,T,eVecsL,eVecsR,eVals,exp_sum_j,omegaX,delta,Vplus,Vminus,alpha,beta,TempFlag=True):
 
-                #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
+    print(TempFlag)
+    if TempFlag:
+        for i in prange(Qgrid):
+            for j in range(Egrid):
+                Total=0
+                for k in range(N):
+                    XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
+                    XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
 
-                Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XL),(exp_sum_j[i,:]*XL).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) #*(boson_dist(eVals[i,k+N],T)+1) 
+                    #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
 
-                #if i==0 and j==0:
-                #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
-                #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
-            plotValues[j,i]=Total
+                    Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XR),(exp_sum_j[i,:]*XR).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) *(boson_dist(omegaX[j],T)+1) 
+
+                    #if i==0 and j==0:
+                    #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
+                    #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
+                plotValues[j,i]=Total
+    else:
+        for i in prange(Qgrid):
+            for j in range(Egrid):
+                Total=0
+                for k in range(N):
+                    XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
+                    XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
+
+                    #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
+
+                    Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XL),(exp_sum_j[i,:]*XL).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) * 2 
+
+                    #if i==0 and j==0:
+                    #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
+                    #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
+                plotValues[j,i]=Total
     return plotValues
 
 
@@ -287,7 +306,7 @@ def v_matrix_minus(Atoms,r,alpha):
                 [ssin(theta_r)*scos(phi_r),ssin(theta_r)*ssin(phi_r),scos(theta_r)]])
     
     return complex(U[0,alpha] - 1.0j*U[1,alpha])
-
+@njit
 def lorentzian_distribution(energy, energy_ref, thickness):
     """
     Compute the value of the Lorentzian distribution at a given energy.
@@ -301,15 +320,15 @@ def lorentzian_distribution(energy, energy_ref, thickness):
     float: The value of the Lorentzian distribution at the given energy.
     """
     return 1.0 / (np.pi * thickness * (1.0 + ((energy - energy_ref) / thickness) ** 2))
-
+@njit
 def bose_einstein_distribution(energy, chemical_potential, temperature):
-    k_ev = 8.617333262145e-5  # Boltzmann constant in ev/K
+    k_ev = 8.617333262145e-2  # Boltzmann constant in mev/K
 
     # Evaluate the Bose-Einstein distribution
     difference = energy - chemical_potential
     # if np.abs(difference) < 1e-12:  # Handle the case of small energy differences
     #     distribution = 1 / (k_ev * temperature)
-    #else:
+    # else:
     distribution = 1 / (np.exp(difference / (k_ev * temperature)) - 1)
 
     return distribution
@@ -401,14 +420,15 @@ class MagnonInput(AbstractMagnonInput):
                z_periodic: bool = True,
                debugg: bool = False,
                orientation: Sequence = (0,0,1),
-               layers: int=1
+               layers: int=1,
+               scale = (1,1,1)
                #num_configs: int,
                #sigmas: Union[float, Mapping[Union[str, int], float], Sequence[float]],
                #directions: str = 'xyz',
                ):
 
     self._atoms_multi = orthogonalize_cell(atoms)
-    self._atoms_multi = surface(self._atoms_multi, orientation, layers=layers, periodic=z_periodic)
+    self._atoms_multi = surface(self._atoms_multi*scale, orientation, layers=layers, periodic=z_periodic)
 
     indices_to_remove = np.where(atoms.get_initial_magnetic_moments()[:,0] == 0)[0]
 
@@ -688,7 +708,7 @@ class MagnonInput(AbstractMagnonInput):
     self.list_Distances=[]
     for num,j in enumerate(Lists_of_Neigbours): 
         for bondpair in j: 
-            self.list_Distances.append(round(self.get_distance(bondpair),5)) 
+            self.list_Distances.append(round(self.get_distance(bondpair),2)) 
    
 
     self.list_Distances=np.array(list(set(self.list_Distances)))
@@ -707,7 +727,7 @@ class MagnonInput(AbstractMagnonInput):
 
 
     q = np.copy(self._qpts)
-    q[:,2]=0
+    #q[:,2]=0
 
     nw_length=[len(term) for term in M_types]
 
@@ -717,7 +737,7 @@ class MagnonInput(AbstractMagnonInput):
         #print(j)
         for i in j:
             
-            self.DistanceInd=np.where(self.list_Distances==round(self.get_distance(i),5))[0][0]#np.where(self.list_Distances==round(get_distance(self,i),5))[0][0]
+            self.DistanceInd=np.where(self.list_Distances==round(self.get_distance(i),2))[0][0]#np.where(self.list_Distances==round(get_distance(self,i),5))[0][0]
             #print(self.DistanceInd)
             ## Layer of atoms 
             Layer1=np.where((self.zNum==float(self._atoms.get_scaled_positions()[i[0],-1])))[0][0]
@@ -740,17 +760,21 @@ class MagnonInput(AbstractMagnonInput):
             Sr=(S[(sumnw_length_i)+rn])
             Ss=(S[(sumnw_length_j)+sn])
 
+            if debugger:
+                print(i,r,s,round(self.get_distance(i),5),self.DistanceInd)
+
+
             if self._interaction_override[(sumnw_length_i)+rn,(sumnw_length_j)+sn,num]==None:
                 JMatrixValue=self.Js[r,s,self.DistanceInd]
             else:
                 JMatrixValue=self._interaction_override[(sumnw_length_i)+rn,(sumnw_length_j)+sn,num]
 
-            if debugger:
-                print(i,r,s,round(self.get_distance(i),5),JMatrixValue)
 
             ######################
             z=1*(self.M_list[Layer1]/N_list[Layer1])
-            Gamma=(np.exp(-1.0j*np.dot(self.get_distance_vector(i),np.transpose(2*np.pi*(q/np.array([a,a,a]))))))*(self.M_list[Layer1]/N_list[Layer1])
+            #Gamma=(np.exp(-1.0j*np.dot(self.get_distance_vector(i),np.transpose(2*np.pi*(q/np.array([a,a,a]))))))*(self.M_list[Layer1]/N_list[Layer1])
+            
+            Gamma=(np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(i))))*(self.M_list[Layer1]/N_list[Layer1])
             FzzM=Fzz(self,i[0],i[1])
             G1M=G1(self,i[0],i[1])
             G2M=G2(self,i[0],i[1])
@@ -810,7 +834,7 @@ class MagnonInput(AbstractMagnonInput):
 
 ####### Anisotropy ###########
 
-  def HamiltonianK(self,step_size=0.01,hermitian=True):
+  def HamiltonianK(self,step_size=0.01,hermitian=False):
 
     MML=len(self.atoms.get_initial_magnetic_moments())
 
@@ -842,7 +866,7 @@ class MagnonInput(AbstractMagnonInput):
 
 ####### Anisotropy film ###########
 
-  def HamiltonianK_film(self,step_size=0.01,hermitian=True):
+  def HamiltonianK_film(self,step_size=0.01,hermitian=False):
 
     MML=len(self.atoms.get_initial_magnetic_moments())
 
@@ -903,40 +927,98 @@ class MagnonInput(AbstractMagnonInput):
       
       return eVals_full,eVecs_fullL,eVecs_fullR    
 
-  def spin_scattering_function(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1):
-    
+  
+  def spin_scattering_function(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,num_processors=1):
+
+    # Set the number of processors
+    os.environ["NUMBA_NUM_THREADS"] = str(num_processors)
+    config.NUMBA_NUM_THREADS = num_processors
+
     eVals_full,eVecs_fullL,eVecs_fullR = self.diagonalize_function(H)
     omega=np.linspace(Emin,Emax,Estep)
 
     X1=np.zeros(np.shape(eVecs_fullL),dtype=complex)
-    X2=np.zeros(np.shape(eVecs_fullL),dtype=complex)    
+    # X2=np.zeros(np.shape(eVecs_fullL),dtype=complex)    
 
-    for i in range(np.shape(eVecs_fullL)[-1]):
+    for i in prange(np.shape(eVecs_fullL)[-1]):
         X1[:,:,i] = np.linalg.inv(eVecs_fullL[:,:,i])
 
-    for i in range(np.shape(eVecs_fullL)[-1]):
-        X2[:,:,i] = np.linalg.inv(eVecs_fullR[:,:,i])        
+    # for i in prange(np.shape(eVecs_fullL)[-1]):
+    #     X2[:,:,i] = np.linalg.inv(eVecs_fullR[:,:,i])        
 
-    SpinSpin=np.zeros([Estep,len(self._qpts)],dtype=complex)
+    SpinSpinPlus=np.zeros([Estep,len(self._qpts)],dtype=complex)
+    SpinSpinMinus=np.zeros([Estep,len(self._qpts)],dtype=complex)
 
     print(Direction[0])
 
-    for Enum,En in enumerate(omega):
-        for n in range(np.shape(H)[0]):
-            Smatrix=0
-            for r in range(np.shape(H)[0]//2):
-                for s in range(np.shape(H)[0]//2):
+    shape_H = np.shape(H)[0]
+    M = shape_H // 2
 
-                    Wval=v_matrix_minus(self,r,Direction[0])*X2[n,r,:] + v_matrix_plus(self,r,Direction[1])*X2[n,r+self.M,:]
-                    Wconj=np.conj(v_matrix_minus(self,s,Direction[0])*X1[n,s,:] + v_matrix_plus(self,s,Direction[1])*X1[n,s+self.M,:])
+    print(M)
+    # for Enum, En in enumerate(omega):
+    #     Smatrix = np.zeros_like(SpinSpin[0, :])  # Initialize Smatrix for each Enum
+    #     for r in range(shape_H // 2):
+    #         for s in range(shape_H // 2):
+    #             Wval1 = v_matrix_minus(self, r, Direction[0]) * X1[:, r, :] + v_matrix_plus(self, r, Direction[1]) * X1[:, r + M, :]
+    #             Wval2 = v_matrix_minus(self, s, Direction[0]) * X1[:, s, :] + v_matrix_plus(self, s, Direction[1]) * X1[:, s + M, :]
+    #             #Wconj = np.conj(v_matrix_minus(self, s, Direction[0]) * X1[:, s, :] + v_matrix_plus(self, s, Direction[1]) * X1[:, s + M, :])
 
-                    Smatrix+=(Wval*Wconj)
+    #             Smatrix += np.sum(Wval1*np.conj(Wval2),axis=0)    
+    #             #Smatrix += np.sum(Wval*Wconj,axis=0) 
+        
+    #     SpinSpin[Enum, :] =  Smatrix * np.sum(lorentzian_distribution(En, eVals_full[:, :], broadening), axis=1) #*(boson_dist(abs(En),self.Temperature)+1)
 
-            SpinSpin[Enum,:] = SpinSpin[Enum,:] + (bose_einstein_distribution(abs(En), 0,self.Temperature)+1)*(Smatrix*lorentzian_distribution(En, eVals_full[:,n], broadening))
+    for Enum, En in enumerate(omega):
+        SmatrixPlus = np.zeros_like(SpinSpinPlus[0, :])  # Initialize Smatrix for each Enum
+        SmatrixMinus = np.zeros_like(SpinSpinMinus[0, :])  # Initialize Smatrix for each Enum
+        for r in range(shape_H // 2):
+            for s in range(shape_H // 2):
+                # Wval1Plus =         v_matrix_minus(self, r, Direction[0]) * X1[:M, r    , :] + \
+                #                     v_matrix_plus(self, r, Direction[0])  * X1[:M, r + M, :]
+                # Wval2Plus = np.conj(v_matrix_minus(self, s, Direction[1]) * X1[:M, s    , :] + \
+                #                     v_matrix_plus(self, s, Direction[1])  * X1[:M, s + M, :])
+
+                # SmatrixPlus += np.sum(Wval1Plus*Wval2Plus,axis=0)    
+                
+                # Wval1Minus =         v_matrix_minus(self, r, Direction[0]) * np.conj(X1[M:, r + M, :]) + \
+                #                      v_matrix_plus(self, r, Direction[0])  * np.conj(X1[M:, r    , :])
+                # Wval2Minus = np.conj(v_matrix_minus(self, s, Direction[1])) * X1[M:, s + M, :] + \
+                #              np.conj(v_matrix_plus(self, s, Direction[1]))  * X1[M:, s    , :]
+
+                # SmatrixMinus += np.sum(Wval1Minus*Wval2Minus,axis=0)    
+
+                Wval1Plus =         v_matrix_minus(self, r, Direction[0]) * X1[r, :M    , :] + \
+                                    v_matrix_plus(self, r, Direction[0])  * X1[r + M,:M, :]
+                Wval2Plus = np.conj(v_matrix_minus(self, s, Direction[1]) * X1[s, :M    , :] + \
+                                    v_matrix_plus(self, s, Direction[1])  * X1[s + M, :M, :])
+
+                SmatrixPlus += np.sum(Wval1Plus*Wval2Plus,axis=0)    
+                
+                Wval1Minus =         v_matrix_minus(self, r, Direction[0])  * np.conj(X1[r + M, M:, :]) + \
+                                     v_matrix_plus(self, r, Direction[0])   * np.conj(X1[r, M:    , :])
+                Wval2Minus = np.conj(v_matrix_minus(self, s, Direction[1])) * X1[s + M, M:, :] + \
+                             np.conj(v_matrix_plus(self, s, Direction[1]))  * X1[s, M:    , :]
+
+                SmatrixMinus += np.sum(Wval1Minus*Wval2Minus,axis=0)         
+        SpinSpinPlus[Enum, :] =  SmatrixPlus * np.sum(lorentzian_distribution(En, eVals_full[:, M:], broadening), axis=1) *(boson_dist(abs(En),self.Temperature)+1)
+        SpinSpinMinus[Enum, :] =  SmatrixMinus * np.sum(lorentzian_distribution(En, eVals_full[:, :M], broadening), axis=1) *(boson_dist(abs(En),self.Temperature)+1)
+
+    SpinSpin=(SpinSpinPlus-SpinSpinMinus)*(bose_einstein_distribution(abs(omega), 0, self.Temperature)+1)[:, np.newaxis]#*(boson_dist(abs(omega),self.Temperature)+1)[:, np.newaxis]
+    # for Enum,En in enumerate(omega):
+    #     for n in range(np.shape(H)[0]):
+    #         Smatrix=0
+    #         for r in range(np.shape(H)[0]//2):
+    #             for s in range(np.shape(H)[0]//2):
+    #                 Wval=v_matrix_minus(self,r,Direction[0])*X2[n,r,:] + v_matrix_plus(self,r,Direction[1])*X2[n,r+self.M,:]
+    #                 Wconj=np.conj(v_matrix_minus(self,s,Direction[0])*X1[n,s,:] + v_matrix_plus(self,s,Direction[1])*X1[n,s+self.M,:])
+
+    #                 Smatrix+=(Wval*Wconj)
+
+    #         SpinSpin[Enum,:] = SpinSpin[Enum,:] + (bose_einstein_distribution(abs(En), 0,self.Temperature)+1)*(Smatrix*lorentzian_distribution(En, eVals_full[:,n], broadening))
 
     return SpinSpin
-
-  def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,num_processors=1):
+  
+  def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,TempFlag=True,num_processors=1):
     
     Directions=['x','y','z']
 
@@ -960,20 +1042,27 @@ class MagnonInput(AbstractMagnonInput):
     b=self._atoms.cell[1,1]
     c=self._atoms.cell[2,2]
 
-    Total=[]
+    # Total=[]
 
-    for numi,i in enumerate(self.M_list):
-        for j in range(i):
-            Total.append(self.zNum[numi]*c)
+    # for numi,i in enumerate(self.M_list):
+    #     for j in range(i):
+    #         Total.append(self.zNum[numi]*c)
 
-    Total=np.array(Total)
+    # Total=np.array(Total)
 
-    A = (np.zeros(len(Total)))
-    A = np.vstack((A,np.zeros(len(Total))))
-    A = np.vstack((A,Total))
-    A = np.transpose(A)
+    # A = (np.zeros(len(Total)))
+    # A = np.vstack((A,np.zeros(len(Total))))
+    # A = np.vstack((A,Total))
+    # A = np.transpose(A)
 
-    exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*self._qpts/np.array([a,b,c]),np.transpose(A)))
+    A = np.array(self._atoms.get_scaled_positions())
+    A = A[A[:, -1].argsort()]
+    #A[:,0] = 0
+    #A[:,1] = 0
+#np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(i))
+    exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*self._qpts@np.linalg.inv(self._atoms.cell[:]),np.transpose(A)))
+    #exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*self._qpts/np.array([a,b,c]),np.transpose(A)))
+
     exp_sum_j = cleanup(exp_sum_j)
 
     alpha=Directions.index(Direction[0])
@@ -983,7 +1072,7 @@ class MagnonInput(AbstractMagnonInput):
 
     print('Calling Fortran')
 
-    plotValues= scattering_function_loop(Qgrid,Estep,plotValues,N,self.Temperature,eVecs_fullL,eVecs_fullR,eVals_full,exp_sum_j,omegaX,broadening,Vplus,Vminus,Directions.index(Direction[0]),Directions.index(Direction[1]))
+    plotValues= scattering_function_loop(Qgrid,Estep,plotValues,N,self.Temperature,eVecs_fullL,eVecs_fullR,eVals_full,exp_sum_j,omegaX,broadening,Vplus,Vminus,Directions.index(Direction[0]),Directions.index(Direction[1]),TempFlag=TempFlag)
 
     #magnons.magnons_function(Qgrid,Estep,plotValues,N,2*N,self.Temperature,eVecs_fullL,eVals_full,exp_sum_j,omegaX,broadening,Vplus,Vminus,Directions.index(Direction[0]),Directions.index(Direction[1]))  #Directions.index(Direction[0]),Directions.index(Direction[1])
 

@@ -1523,7 +1523,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         #     A[1,0,numS]= scos(S[1])*ssin(S[2]); A[1,1,numS]= scos(S[2]); A[1,2,numS]=ssin(S[1])*ssin(S[2])
         #     A[2,0,numS]=-ssin(S[1])           ; A[2,1,numS]= 0         ; A[2,2,numS]=scos(S[1])
 
-        print(self.mag_variables.atoms.get_initial_magnetic_moments())
+        #print(self.mag_variables.atoms.get_initial_magnetic_moments())
 
         for numS,S in enumerate(self.mag_variables.atoms.get_initial_magnetic_moments()):
             A[0,0,numS]= scos(S[1])*scos(S[2]); A[0,1,numS]=-ssin(S[2]); A[0,2,numS]=ssin(S[1])*scos(S[2]) 
@@ -1595,8 +1595,8 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
                 # print('A=',(self.mag_variables.eVecs_fullR[:N, N:, numq]))
                 # print('B=',(sqrt_Nk_plus_1*Aq2))
-                print(np.shape(Aq1))
-                print(np.shape(sqrt_Nk_plus_1))
+                #print(np.shape(Aq1))
+                #print(np.shape(sqrt_Nk_plus_1))
 
                 Projection2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk*Aq1[:,2]))
                 
