@@ -9,6 +9,8 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
+
+from sympy import pprint
 from scipy.linalg import eig
 import sympy as sym
 import numpy as np
@@ -33,6 +35,7 @@ from abtem.structures import orthogonalize_cell
 from ase.build import surface
 
 
+
 @njit
 def boson_dist(omegaN,T):
     Kb=8.617333e-2#8.617333e-5
@@ -50,42 +53,96 @@ def broadening(omega,omegaN,delta):
 
     return broadening
 
-@njit(parallel=True)
+@njit
+def innerLoop(i,Estep,N,delta,exp_sum_j,XR_array,eVecsR,eVals_full3,omegaX,Vminus,Vplus,alpha,beta,TempFlag,T):
+    vertical = np.empty((Estep), dtype=np.complex128)
+    if TempFlag:
+        for j in range(Estep):
+            Total = 0
+            for k in range(N):
+                XR_array[:, k] = Vminus[alpha, k] * eVecsR[:N, k + N, i] + Vplus[beta, k] * eVecsR[N:, k + N, i]
+
+                outer_product_XR = np.outer(np.conjugate(exp_sum_j[i, :] * XR_array[:, k]), (exp_sum_j[i, :] * XR_array[:, k]))
+
+                Total += np.sum(outer_product_XR) * broadening(omegaX[j], eVals_full3[i, k + N], delta) * (boson_dist(omegaX[j],T)+1) 
+            
+            vertical[j] = Total
+    else:   
+        for j in range(Estep):
+            Total = 0
+            for k in range(N):
+                XR_array[:, k] = Vminus[alpha, k] * eVecsR[:N, k + N, i] + Vplus[beta, k] * eVecsR[N:, k + N, i]
+
+                outer_product_XR = np.outer(np.conjugate(exp_sum_j[i, :] * XR_array[:, k]), (exp_sum_j[i, :] * XR_array[:, k]))
+
+                Total += np.sum(outer_product_XR) * broadening(omegaX[j], eVals_full3[i, k + N], delta) * 2
+            
+            vertical[j] = Total
+    return vertical
+
+#@njit(parallel=True)
 def scattering_function_loop(Qgrid,Egrid,plotValues,N,T,eVecsL,eVecsR,eVals,exp_sum_j,omegaX,delta,Vplus,Vminus,alpha,beta,TempFlag=True):
 
-    print(TempFlag)
-    if TempFlag:
-        for i in prange(Qgrid):
-            for j in range(Egrid):
-                Total=0
-                for k in range(N):
-                    XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
-                    XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
+    # print(TempFlag)
+    # if TempFlag:
+    #     for i in prange(Qgrid):
+    #         for j in range(Egrid):
+    #             Total=0
+    #             for k in range(N):
+    #                 XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
+    #                 XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
 
-                    #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
+    #                 #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
 
-                    Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XR),(exp_sum_j[i,:]*XR).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) *(boson_dist(omegaX[j],T)+1) 
+    #                 Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XR),(exp_sum_j[i,:]*XR).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) *(boson_dist(omegaX[j],T)+1) 
 
-                    #if i==0 and j==0:
-                    #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
-                    #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
-                plotValues[j,i]=Total
-    else:
-        for i in prange(Qgrid):
-            for j in range(Egrid):
-                Total=0
-                for k in range(N):
-                    XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
-                    XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
+    #                 #if i==0 and j==0:
+    #                 #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
+    #                 #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
+    #             plotValues[j,i]=Total
+    #else:
+        # for i in prange(Qgrid):
+        #     for j in range(Egrid):
+        #         Total=0
+        #         for k in range(N):
+        #             XL = (Vminus[alpha,k]*eVecsL[:N,k+N,i] + Vplus[beta,k]*eVecsL[N:,k+N,i])
+        #             XR = (Vminus[alpha,k]*eVecsR[:N,k+N,i] + Vplus[beta,k]*eVecsR[N:,k+N,i])    
+                    
+        #             Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XR),(exp_sum_j[i,:]*XR).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) * 2 
+        #             Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XL),(exp_sum_j[i,:]*XL).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) * 2 
 
-                    #if (boson_dist(eVals[i,k+N],T)+1)!=0.0+0.0j:
+        #         plotValues[j,i]=Total
+        #XL_array = np.empty((N, N), dtype=np.complex128)
+        #XR_array = np.empty((N, N), dtype=np.complex128)
+        #XR_array_1 = np.empty((N, N, Qgrid), dtype=np.complex128)
+        #XR_array_2 = np.empty((N, N, Qgrid), dtype=np.complex128)
+        
 
-                    Total+=np.sum(np.outer(np.conjugate(exp_sum_j[i,:].T*XL),(exp_sum_j[i,:]*XL).T)) *  broadening(omegaX[j],eVals[i,k+N],delta) * 2 
+        #XR_array_1 = Vminus[alpha,:N]*eVecsR[:N, N:, :] +  Vplus[beta,:N]*eVecsR[N:, N:, :]
+        
+        
+        #XR_array_2 = eVecsR[:N, :N, :] +  eVecsR[N:, :N, :]
+    XR_array = np.empty((N, N), dtype=np.complex128)
+    for i in range(Qgrid):
+        plotValues[:, i] = innerLoop(i,Egrid,N,delta,exp_sum_j,XR_array,eVecsR,eVals,omegaX,Vminus,Vplus,alpha,beta,TempFlag,T)
+        # for i in range(Qgrid):
+        #     for j in range(Egrid):
+        #         Total = 0
 
-                    #if i==0 and j==0:
-                    #    print('BD',(boson_dist(eVals[i,k+N],T)+1))
-                    #    print('BDning',broadening(omegaX[j],eVals[i,k+N],delta))
-                plotValues[j,i]=Total
+        #         for k in range(N):
+        #             #XL_array[:, k] = Vminus[alpha, k] * eVecsL[:N, k + N, i] + Vplus[beta, k] * eVecsL[N:, k + N, i]
+        #             #XR_array[:, k] = Vminus[alpha, k] * eVecsR[:N, k + N, i] + Vplus[beta, k] * eVecsR[N:, k + N, i]
+        #             #XR_array_1[:, k] = eVecsR[:N, k + N, i] +  eVecsR[N:, k + N, i]
+        #             #XR_array_2[:, k] = eVecsR[:N, k, i] +  eVecsR[N:, k, i]
+
+
+        #             outer_product_XR = np.outer(np.conjugate(exp_sum_j[i, :] * XR_array_1[:, k,i]), (exp_sum_j[i, :] * XR_array_1[:, k,i]))
+        #             #outer_product_XL = np.outer(np.conjugate(exp_sum_j[i, :].T * XL_array[:, k]), (exp_sum_j[i, :] * XL_array[:, k]))
+
+        #             Total += np.sum(outer_product_XR) * broadening(omegaX[j], eVals[i, k + N], delta) * 2
+        #             #Total += np.sum(np.real(outer_product_XL)) * broadening(omegaX[j], eVals[i, k + N], delta) * 2
+
+        #         plotValues[j, i] = Total
     return plotValues
 
 
@@ -555,51 +612,133 @@ class MagnonInput(AbstractMagnonInput):
 
       return Lists_of_Neigbours
 
-  def Hamiltonian(self,Lists_of_Neigbours=None,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
+  def Hamiltonian_Test(self,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
+      
+    if not hasattr(self, 'Lists_of_Neigbours'):
+        self.Lists_of_Neigbours=self.get_neigb(step_size)
+
+    ML=len(self._atoms.positions)
+
+
+    self.list_Distances=[]
+    for num,j in enumerate(self.Lists_of_Neigbours): 
+        for bondpair in j: 
+            self.list_Distances.append(round(self.get_distance(bondpair),3)) 
+   
+
+    self.list_Distances=np.sort(np.array(list(set(self.list_Distances))))
+
+    H_main=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_main1=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_off1=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_off2=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_final=np.zeros([2*ML,2*ML,len(self._qpts)],dtype=complex)
+
+    Total_types=np.unique(self._atoms.get_initial_magnetic_moments(),axis=0)
+
+    for numNeib,neibList in enumerate(self.Lists_of_Neigbours):
+        for interaction in neibList:
+
+            self.DistanceInd=np.where(self.list_Distances==round(self.get_distance(interaction),3))[0][0]            
+            
+            r=interaction[0]#
+            s=interaction[1]
+
+            Sr=self._atoms.get_initial_magnetic_moments()[r][0]
+            Ss=self._atoms.get_initial_magnetic_moments()[s][0]
+
+            FzzM=Fzz(self,r,s)
+            G1M=G1(self,r,s)
+            G2M=G2(self,r,s)
+
+            rJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[r]).all(axis=1))[0][0]
+            sJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[s]).all(axis=1))[0][0]          
+
+            Gamma=np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction)))
+
+            if debugger:
+                #print(r,s,Gamma[r,s,numNeib,0])
+                print(numNeib,interaction,rJ,sJ,self.DistanceInd,self.list_Distances[self.DistanceInd],self._interaction[rJ,sJ,self.DistanceInd])
+
+            H_main[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
+            H_main[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
+
+            H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*np.conj(G1M) + np.conj(Gamma)*G1M)
+
+            H_main1[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
+            H_main1[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
+
+            H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*G1M + np.conj(Gamma)*np.conj(G1M))
+
+            H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*np.conj(G2M) + Gamma*np.conj(G2M))
+            H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*G2M + Gamma*G2M)
+
+    if hermitian:
+        for i in range(len(self._qpts)):
+            H_final[:,:,i]=np.block([[H_main[:,:,i],H_off1[:,:,i]],
+                                    [H_off2[:,:,i],H_main1[:,:,i]]])
+    else:
+        for i in range(len(self._qpts)):
+            H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
+                                    [H_off2[:,:,i],-(H_main1[:,:,i])]])
+
+    # if badflag:
+    #     return H_final, self.orientationEach
+    # else:
+    #     return H_final
+    return H_final/4
+
+
+  def Hamiltonian(self,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
 
     
-    if Lists_of_Neigbours==None:
-        Lists_of_Neigbours=self.get_neigb(step_size)
+    if not hasattr(self, 'Lists_of_Neigbours'):
+        self.Lists_of_Neigbours=self.get_neigb(step_size)
 
-    self.zNum=self._atoms.get_scaled_positions()[:,2]
-    self.zNum=[float(i) for i in self.zNum]
-    self.N_dict = {i:list(self.zNum).count(i) for i in self.zNum}
-    self.zNum=np.array([*sorted(set(self.zNum))])
+    # self.zNum=self._atoms.get_scaled_positions()[:,2]
+    # self.zNum=[float(i) for i in self.zNum]
+    # self.N_dict = {i:list(self.zNum).count(i) for i in self.zNum}
+    # self.zNum=np.array([*sorted(set(self.zNum))])
 
-    LayersDictionary={}
-    for i in range(len(self.zNum)):
-        LayersDictionary[i]=np.array([])
+    # LayersDictionary={}
+    # for i in range(len(self.zNum)):
+    #     LayersDictionary[i]=np.array([])
 
-    for num,i in enumerate(self._atoms.get_scaled_positions()):
-        Temp=np.where((self.zNum==float(i[-1])))[0][0]
-        LayersDictionary[Temp]=np.append(LayersDictionary[Temp],self._atoms.get_initial_magnetic_moments()[num])
+    # for num,i in enumerate(self._atoms.get_scaled_positions()):
+    #     Temp=np.where((self.zNum==float(i[-1])))[0][0]
+    #     LayersDictionary[Temp]=np.append(LayersDictionary[Temp],self._atoms.get_initial_magnetic_moments()[num])
 
-    for i in range(len(self.zNum)):
-        Term1=LayersDictionary[i]
-        LayersDictionary[i]=np.reshape(Term1,(len(Term1)//3,3))
-        LayersDictionary[i]=np.unique(LayersDictionary[i], axis=0)
+    # for i in range(len(self.zNum)):
+    #     Term1=LayersDictionary[i]
+    #     LayersDictionary[i]=np.reshape(Term1,(len(Term1)//3,3))
+    #     LayersDictionary[i]=np.unique(LayersDictionary[i], axis=0)
 
 
-    self.orientationEach = np.array([LayersDictionary[i][j] for i in LayersDictionary.keys() for j,value in enumerate(LayersDictionary[i])])
+    # self.orientationEach = np.array([LayersDictionary[i][j] for i in LayersDictionary.keys() for j,value in enumerate(LayersDictionary[i])])
 
 
     ML=len(self._atoms.positions)
 
-    Gamma=np.zeros([ML,ML,len(Lists_of_Neigbours),len(self._qpts)],dtype=complex) #Gamma[r,s,numNeib,0]=GammaValue    Gamma[r,s,numNeib,1]+=z
-    z=np.zeros([ML,ML,len(Lists_of_Neigbours)])
-    for numNeib,neibList in enumerate(Lists_of_Neigbours):
+    Gamma=np.zeros([ML,ML,len(self.Lists_of_Neigbours),len(self._qpts)],dtype=complex) #Gamma[r,s,numNeib,0]=GammaValue    Gamma[r,s,numNeib,1]+=z
+    z=np.zeros([ML,ML,len(self.Lists_of_Neigbours)])
+    for numNeib,neibList in enumerate(self.Lists_of_Neigbours):
         for interaction in neibList:
             
             r=interaction[0]#
             s=interaction[1]
-            
-            Gamma[r,s,numNeib,:]+=(np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction))))
+
+            Gamma[r,s,numNeib,:]+=np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction)))
+            #Gamma[s,r,numNeib,:]+=np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction)))
+
+            print(r,s,numNeib,self.get_distance_vector_scaled(interaction))#interaction,Gamma[r,s,numNeib,:])
 
             #Gamma[r,s,numNeib,:]+=(np.exp(-1.0j*np.dot(Input_mag.get_distance_vector(interaction),np.transpose(2*np.pi*(np.matmul(Input_mag._qpts,np.linalg.inv(Input_mag._atoms.cell[:])))))))
             
             z[r,s,numNeib]+=1
+            #z[s,r,numNeib]+=1
 
-            
+    
+    #print(Gamma)     
     loop=np.shape(z)
     for i in range(loop[0]):
         for j in range(loop[1]):
@@ -608,6 +747,8 @@ class MagnonInput(AbstractMagnonInput):
                     Gamma[i,j,k,:]/=z[i,j,k]
                 else:
                     continue
+    self.z=z
+    self.Gamma=Gamma
 
 
     H_main=np.zeros([loop[0],loop[1],len(self._qpts)],dtype=complex)
@@ -632,22 +773,52 @@ class MagnonInput(AbstractMagnonInput):
 
                 rJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[r]).all(axis=1))[0][0]
                 sJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[s]).all(axis=1))[0][0]          
-                
-                if r==s:
-                    H_main[r,r,:]+=(1/2)*Sr*z[r,r,numNeib]*self._interaction[rJ,rJ,numNeib]*(1-Gamma[r,r,numNeib,:]) 
-                    H_main1[r,r,:]+=(1/2)*Sr*z[r,r,numNeib]*self._interaction[rJ,rJ,numNeib]*(1-Gamma[r,r,numNeib,:]) 
-                else:
-                    H_main[r,r,:]+=(1/2)*Ss*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM  
-                    H_main1[r,r,:]+=(1/2)*Ss*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM
-                    
-                    
-                    H_main[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*G1M
-                    H_main1[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*np.conj(G1M)
-                    
-                    H_off2[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*np.conj(G2M)
-                    H_off1[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*G2M
 
+                if debugger:
+                    #print(r,s,Gamma[r,s,numNeib,0])
+                    print(r,s,numNeib,z[r,s,numNeib],Sr,Ss,self._interaction[rJ,sJ,numNeib],(1-Gamma[r,r,numNeib,0]),FzzM,G1M,G2M)
+
+                # if r==s:
+                #     H_main[r,r,:]+=(1/2)*Sr*z[r,r,numNeib]*self._interaction[rJ,rJ,numNeib]*(1-Gamma[r,r,numNeib,:]) 
+                #     H_main1[r,r,:]+=(1/2)*Sr*z[r,r,numNeib]*self._interaction[rJ,rJ,numNeib]*(1-Gamma[r,r,numNeib,:]) 
+                # else:
+                #     H_main[r,r,:]+=(1/2)*Ss*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM  
+                #     H_main1[s,s,:]+=(1/2)*Sr*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM
+                    
+                    
+                #     H_main[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*G1M
+                #     H_main1[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*np.conj(G1M)
+                    
+                #     H_off2[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*np.conj(G2M)
+                #     H_off1[r,s,:]-=(1/4)*(np.sqrt(Sr*Ss))*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:]))*G2M
+
+                H_main[r,r,:]+=Ss*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM
+                H_main[s,s,:]+=Sr*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM
+
+                H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(Gamma[r,s,numNeib,:]*np.conj(G1M) + np.conj(Gamma[r,s,numNeib,:])*G1M)
+
+                H_main1[r,r,:]+=Ss*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM
+                H_main1[s,s,:]+=Sr*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*FzzM
+
+                H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(Gamma[r,s,numNeib,:]*G1M + np.conj(Gamma[r,s,numNeib,:])*np.conj(G1M))
+
+                H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:])*np.conj(G2M) + Gamma[r,s,numNeib,:]*np.conj(G2M))
+                H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:])*G2M + Gamma[r,s,numNeib,:]*G2M)
+               
+                # H_main[r,r,:]+=Sr*z[r,r,numNeib]*self._interaction[rJ,rJ,numNeib]*FzzM
+                # H_main[s,s,:]+=Ss*z[s,s,numNeib]*self._interaction[sJ,sJ,numNeib]*FzzM
                 
+                # H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(Gamma[r,s,numNeib,:]*G1M + np.conj(Gamma[r,s,numNeib,:])*np.conj(G1M))
+                
+                # H_main1[r,r,:]+=Sr*z[r,r,numNeib]*self._interaction[rJ,rJ,numNeib]*FzzM
+                # H_main1[s,s,:]+=Ss*z[s,s,numNeib]*self._interaction[sJ,sJ,numNeib]*FzzM
+                
+                # H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(Gamma[r,s,numNeib,:]*G1M + np.conj(Gamma[r,s,numNeib,:])*np.conj(G1M))
+                
+                # H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(Gamma[r,s,numNeib,:]*np.conj(G2M) + np.conj(Gamma[r,s,numNeib,:])*G2M)
+                # H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*z[r,s,numNeib]*self._interaction[rJ,sJ,numNeib]*(np.conj(Gamma[r,s,numNeib,:])*G2M + Gamma[r,s,numNeib,:]*np.conj(G2M))
+                
+                pprint(H_main[:,:,0])
     if hermitian:
         for i in range(len(self._qpts)):
             H_final[:,:,i]=np.block([[H_main[:,:,i],H_off1[:,:,i]],
@@ -657,15 +828,16 @@ class MagnonInput(AbstractMagnonInput):
             H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
                                     [H_off2[:,:,i],-(H_main1[:,:,i])]])
 
-    if badflag:
-        return H_final, self.orientationEach
-    else:
-        return H_final
+    # if badflag:
+    #     return H_final, self.orientationEach
+    # else:
+    #     return H_final
+    return H_final/4
 
   def Hamiltonian_film(self,Lists_of_Neigbours=None,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
 
-    if Lists_of_Neigbours==None:
-        Lists_of_Neigbours=self.get_neigb(step_size)
+    if not hasattr(self, 'Lists_of_Neigbours'):
+        self.Lists_of_Neigbours=self.get_neigb(step_size)
 
     self.zNum=self._atoms.get_scaled_positions()[:,2]
     self.zNum=[float(i) for i in self.zNum]
@@ -685,11 +857,6 @@ class MagnonInput(AbstractMagnonInput):
         LayersDictionary[i]=np.reshape(Term1,(len(Term1)//3,3))
         LayersDictionary[i]=np.unique(LayersDictionary[i], axis=0)
 
-    a=self._atoms.cell[0,0]
-    b=self._atoms.cell[1,1]
-    c=self._atoms.cell[2,2]
-
-
     self.orientationEach = np.array([LayersDictionary[i][j] for i in LayersDictionary.keys() for j,value in enumerate(LayersDictionary[i])])
 
     self.Total_types=np.unique(self._atoms.get_initial_magnetic_moments(),axis=0)
@@ -706,7 +873,7 @@ class MagnonInput(AbstractMagnonInput):
     N_list=[self.N_dict[key] for key in self.N_dict.keys()]
 
     self.list_Distances=[]
-    for num,j in enumerate(Lists_of_Neigbours): 
+    for num,j in enumerate(self.Lists_of_Neigbours): 
         for bondpair in j: 
             self.list_Distances.append(round(self.get_distance(bondpair),2)) 
    
@@ -725,15 +892,16 @@ class MagnonInput(AbstractMagnonInput):
     H_off2=np.zeros([sum(self.M_list),sum(self.M_list),len(self._qpts)],dtype=complex)
     H_final=np.zeros([2*sum(self.M_list),2*sum(self.M_list),len(self._qpts)],dtype=complex)
 
-
-    q = np.copy(self._qpts)
-    #q[:,2]=0
-
     nw_length=[len(term) for term in M_types]
+
+
+    ML=len(self._atoms.positions)
+
+    Gamma_matrix=np.zeros([ML,ML,len(self.Lists_of_Neigbours),len(self._qpts)],dtype=complex)
 
     S=self._atoms.get_initial_magnetic_moments()[:,0]
 
-    for num,j in enumerate(Lists_of_Neigbours):
+    for num,j in enumerate(self.Lists_of_Neigbours):
         #print(j)
         for i in j:
             
@@ -760,8 +928,7 @@ class MagnonInput(AbstractMagnonInput):
             Sr=(S[(sumnw_length_i)+rn])
             Ss=(S[(sumnw_length_j)+sn])
 
-            if debugger:
-                print(i,r,s,round(self.get_distance(i),5),self.DistanceInd)
+
 
 
             if self._interaction_override[(sumnw_length_i)+rn,(sumnw_length_j)+sn,num]==None:
@@ -769,12 +936,19 @@ class MagnonInput(AbstractMagnonInput):
             else:
                 JMatrixValue=self._interaction_override[(sumnw_length_i)+rn,(sumnw_length_j)+sn,num]
 
-
             ######################
+
             z=1*(self.M_list[Layer1]/N_list[Layer1])
+
+            Gamma=(np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(i))))*(self.M_list[Layer1]/N_list[Layer1])
+
+            Gamma_matrix[i[0],i[1],num,:]+=Gamma
+            if debugger:
+                #print(i,r,s,Gamma,z,round(self.get_distance(i),5),self.DistanceInd)
+                print(i[0],i[1],num,self.get_distance_vector_scaled(i))#interaction,Gamma[r,s,numNeib,:])
+                #print((sumnw_length_i)+rn,(sumnw_length_j)+sn,z)
             #Gamma=(np.exp(-1.0j*np.dot(self.get_distance_vector(i),np.transpose(2*np.pi*(q/np.array([a,a,a]))))))*(self.M_list[Layer1]/N_list[Layer1])
             
-            Gamma=(np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(i))))*(self.M_list[Layer1]/N_list[Layer1])
             FzzM=Fzz(self,i[0],i[1])
             G1M=G1(self,i[0],i[1])
             G2M=G2(self,i[0],i[1])
@@ -810,9 +984,11 @@ class MagnonInput(AbstractMagnonInput):
             H_off2[(sumnw_length_i)+rn,(sumnw_length_j)+sn,:]-=JMatrixValue*    \
             + (((np.sqrt((Sr*Ss))/2)*(np.conj(Gamma)*G2M))  \
             +  ((np.sqrt((Sr*Ss))/2)*(Gamma*np.conj(G2M)))) 
-        
-                                  
-                
+
+
+            pprint(H_main[:,:,0])
+
+    self.Gamma=Gamma_matrix   
     if hermitian:
         for i in range(len(self._qpts)):
             H_final[:,:,i]=np.block([[H_main[:,:,i],H_off1[:,:,i]],
@@ -822,9 +998,6 @@ class MagnonInput(AbstractMagnonInput):
             H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
                                      [H_off2[:,:,i],-(H_main1[:,:,i])]])
             
-    
-    
-    
     H_final=H_final/4
 
     if badflag:
@@ -840,6 +1013,7 @@ class MagnonInput(AbstractMagnonInput):
 
     H_main=np.zeros([MML,MML,len(self._qpts)],dtype=complex)
     H_off1=np.zeros([MML,MML,len(self._qpts)],dtype=complex)
+    H_off2=np.zeros([MML,MML,len(self._qpts)],dtype=complex)
     Hk=np.zeros([2*MML,2*MML,len(self._qpts)],dtype=complex)
 
     for num,magMon in enumerate(self.atoms.get_initial_magnetic_moments()):
@@ -850,17 +1024,20 @@ class MagnonInput(AbstractMagnonInput):
         AyTerm=Ay(self,self._anisotropies,num)
         AzTerm=Az(self,self._anisotropies,num)    
         
-        H_main[num,num,:]-=(self._anisotropies[num][0]/2) * ( (Sr*(AxTerm**2)) + (Sr*(AyTerm**2)) - (2*(Sr**2)*(AzTerm**2)) )
-        H_off1[num,num,:]-=(self._anisotropies[num][0]/2) * ((Sr/2)*(AxTerm**2) - (Sr/2)*(AyTerm**2) +1.0j*(Sr/2)*(AxTerm*AyTerm) +1.0j*(Sr/2)*(AyTerm*AxTerm))
+        #H_main[num,num,:]-=(self._anisotropies[num][0]/2) * ( (Sr*(AxTerm**2)) + (Sr*(AyTerm**2)) - (2*(Sr**2)*(AzTerm**2)) )
+        #H_off1[num,num,:]-=(self._anisotropies[num][0]/2) * ((Sr/2)*(AxTerm**2) - (Sr/2)*(AyTerm**2) +1.0j*(Sr/2)*(AxTerm*AyTerm) +1.0j*(Sr/2)*(AyTerm*AxTerm))
+        H_main[num,num,:]-=(self._anisotropies[num][0]/2) * Sr * ( (AxTerm**2) + (AyTerm**2) - (2*(AzTerm**2)) )
+        H_off1[num,num,:]-=(self._anisotropies[num][0]/2) * Sr * (AxTerm + 1.0j*AyTerm)**2
+        H_off2[num,num,:]-=(self._anisotropies[num][0]/2) * Sr * (AxTerm - 1.0j*AyTerm)**2
         
         if hermitian:
             for i in range(len(self._qpts)):
-                Hk[:,:,i]=np.block([[H_main[:,:,i],np.conj(H_off1[:,:,i])],
-                                    [H_off1[:,:,i],H_main[:,:,i]]])
+                Hk[:,:,i]=np.block([[H_main[:,:,i],H_off1[:,:,i]],
+                                    [H_off2[:,:,i],H_main[:,:,i]]])
         else:
             for i in range(len(self._qpts)):
-                Hk[:,:,i]=np.block([[H_main[:,:,i],-np.conj(H_off1[:,:,i])],
-                                    [H_off1[:,:,i],-(H_main[:,:,i])]])  
+                Hk[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
+                                    [H_off2[:,:,i],-(H_main[:,:,i])]])  
 
     return Hk
 
@@ -1020,12 +1197,33 @@ class MagnonInput(AbstractMagnonInput):
   
   def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,TempFlag=True,num_processors=1):
     
+
+    self.zNum=self._atoms.get_scaled_positions()[:,2]
+    self.zNum=[float(i) for i in self.zNum]
+    self.N_dict = {i:list(self.zNum).count(i) for i in self.zNum}
+    self.zNum=np.array([*sorted(set(self.zNum))])
+
+    LayersDictionary={}
+    for i in range(len(self.zNum)):
+        LayersDictionary[i]=np.array([])
+
+    for num,i in enumerate(self._atoms.get_scaled_positions()):
+        Temp=np.where((self.zNum==float(i[-1])))[0][0]
+        LayersDictionary[Temp]=np.append(LayersDictionary[Temp],self._atoms.get_initial_magnetic_moments()[num])
+
+    for i in range(len(self.zNum)):
+        Term1=LayersDictionary[i]
+        LayersDictionary[i]=np.reshape(Term1,(len(Term1)//3,3))
+        LayersDictionary[i]=np.unique(LayersDictionary[i], axis=0)
+
+    self.orientationEach = np.array([LayersDictionary[i][j] for i in LayersDictionary.keys() for j,value in enumerate(LayersDictionary[i])])
+
     Directions=['x','y','z']
 
     print('Diagonalizing H')
-    eVals_full,eVecs_fullL,eVecs_fullR = self.diagonalize_function(H)
+    self.eVals_full,self.eVecs_fullL,self.eVecs_fullR = self.diagonalize_function(H)
     print('Done Diagonalizing H')
-    N = len(eVals_full[0,:])//2
+    N = len(self.eVals_full[0,:])//2
     N1 = len(self.zNum)
     Qgrid = len(self._qpts)
 
@@ -1036,11 +1234,11 @@ class MagnonInput(AbstractMagnonInput):
 
     omegaX=np.linspace(Emin,Emax,Estep,dtype=complex)
 
-    Vplus,Vminus=V(self.orientationEach)
+    Vplus,Vminus=V(self._atoms.get_initial_magnetic_moments())#V(self.orientationEach)
 
-    a=self._atoms.cell[0,0]
-    b=self._atoms.cell[1,1]
-    c=self._atoms.cell[2,2]
+    # a=self._atoms.cell[0,0]
+    # b=self._atoms.cell[1,1]
+    # c=self._atoms.cell[2,2]
 
     # Total=[]
 
@@ -1056,14 +1254,15 @@ class MagnonInput(AbstractMagnonInput):
     # A = np.transpose(A)
 
     A = np.array(self._atoms.get_scaled_positions())
-    A = A[A[:, -1].argsort()]
+
+    #A = A[A[:, -1].argsort()]
     #A[:,0] = 0
     #A[:,1] = 0
 #np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(i))
-    exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*self._qpts@np.linalg.inv(self._atoms.cell[:]),np.transpose(A)))
+    exp_sum_j = np.exp(-1.0j*np.dot(self._qpts@np.linalg.inv(self._atoms.cell[:]),np.transpose(A)))
     #exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*self._qpts/np.array([a,b,c]),np.transpose(A)))
 
-    exp_sum_j = cleanup(exp_sum_j)
+    #exp_sum_j = cleanup(exp_sum_j)
 
     alpha=Directions.index(Direction[0])
     beta=Directions.index(Direction[1])
@@ -1072,13 +1271,15 @@ class MagnonInput(AbstractMagnonInput):
 
     print('Calling Fortran')
 
-    plotValues= scattering_function_loop(Qgrid,Estep,plotValues,N,self.Temperature,eVecs_fullL,eVecs_fullR,eVals_full,exp_sum_j,omegaX,broadening,Vplus,Vminus,Directions.index(Direction[0]),Directions.index(Direction[1]),TempFlag=TempFlag)
+    plotValues= scattering_function_loop(Qgrid,Estep,plotValues,N,self.Temperature,self.eVecs_fullL,self.eVecs_fullR,self.eVals_full,exp_sum_j,omegaX,broadening,Vplus,Vminus,Directions.index(Direction[0]),Directions.index(Direction[1]),TempFlag=TempFlag)
 
     #magnons.magnons_function(Qgrid,Estep,plotValues,N,2*N,self.Temperature,eVecs_fullL,eVals_full,exp_sum_j,omegaX,broadening,Vplus,Vminus,Directions.index(Direction[0]),Directions.index(Direction[1]))  #Directions.index(Direction[0]),Directions.index(Direction[1])
 
     print('Fortran done')
 
-    plotValues=(1/(2*len(self.zNum)))*plotValues
+    #plotValues=(1/(2*len(self._atoms.positions)))*plotValues
+
+    plotValues=(1/(2))*plotValues
 
     return plotValues
 
