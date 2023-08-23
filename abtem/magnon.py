@@ -21,7 +21,9 @@ from ase.dft.kpoints import monkhorst_pack
 
 from collections.abc import Iterable
 
-from numba import njit, prange, config
+#from numba import numba.njit, prange, config, typeof, cfunc
+import numba
+
 
 from ase import Atoms
 from ase.data import covalent_radii
@@ -36,7 +38,7 @@ from ase.build import surface
 
 
 
-@njit
+@numba.njit
 def boson_dist(omegaN,T):
     Kb=8.617333e-2#8.617333e-5
     boson=1/(np.exp((omegaN)/(Kb*T))-1)
@@ -46,14 +48,14 @@ def boson_dist(omegaN,T):
     else:
         return boson
 
-@njit
+@numba.njit
 def broadening(omega,omegaN,delta):
     #delta=0.5
     broadening = (1.0/np.sqrt(2.0*np.pi*(delta**2.0)))*np.exp(-(((omega-omegaN)*np.conjugate(omega-omegaN))/(2.0*(delta**2.0)))) 
 
     return broadening
 
-@njit
+@numba.njit
 def innerLoop(i,Estep,N,delta,exp_sum_j,XR_array,eVecsR,eVals_full3,omegaX,Vminus,Vplus,alpha,beta,TempFlag,T):
     vertical = np.empty((Estep), dtype=np.complex128)
     if TempFlag:
@@ -80,7 +82,7 @@ def innerLoop(i,Estep,N,delta,exp_sum_j,XR_array,eVecsR,eVals_full3,omegaX,Vminu
             vertical[j] = Total
     return vertical
 
-#@njit(parallel=True)
+@numba.njit
 def scattering_function_loop(Qgrid,Egrid,plotValues,N,T,eVecsL,eVecsR,eVals,exp_sum_j,omegaX,delta,Vplus,Vminus,alpha,beta,TempFlag=True):
 
     # print(TempFlag)
@@ -248,6 +250,176 @@ def get_phi(mag):
     if mag[0]==0 and mag[1]==0:
         return 0
 
+######### Generalized interactions #########
+
+def FJzz_matrix(interaction,Total_types,r,s):
+        
+    rJ=np.where(np.all(Total_types==r,axis=1))[0][0]
+    sJ=np.where(np.all(Total_types==s,axis=1))[0][0]
+    
+    J=interaction[:,:,rJ,sJ,:]
+    
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]    
+    
+    
+    return ((J[0,0,:]*ssin(theta_r)*scos(phi_r) + J[1,0,:]*ssin(phi_r)*ssin(theta_r) + J[2,0,:]*scos(theta_r))*ssin(theta_s)*scos(phi_s) +\
+                 (J[0,1,:]*ssin(theta_r)*scos(phi_r) + J[1,1,:]*ssin(phi_r)*ssin(theta_r) + J[2,1,:]*scos(theta_r))*ssin(phi_s)*ssin(theta_s) +\
+                 (J[0,2,:]*ssin(theta_r)*scos(phi_r) + J[1,2,:]*ssin(phi_r)*ssin(theta_r) + J[2,2,:]*scos(theta_r))*scos(theta_s)).astype(float)
+
+
+def FJxx_matrix(interaction,Total_types,r,s):
+        
+    rJ=np.where(np.all(Total_types==r,axis=1))[0][0]
+    sJ=np.where(np.all(Total_types==s,axis=1))[0][0]
+    
+    J=interaction[:,:,rJ,sJ,:]
+    
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]    
+    
+    
+    return ((J[0,0,:]*scos(phi_r)*scos(theta_r) + J[1,0,:]*ssin(phi_r)*scos(theta_r) - J[2,0,:]*ssin(theta_r))*scos(phi_s)*scos(theta_s) +\
+           (J[0,1,:]*scos(phi_r)*scos(theta_r) + J[1,1,:]*ssin(phi_r)*scos(theta_r) - J[2,1,:]*ssin(theta_r))*ssin(phi_s)*scos(theta_s) -\
+           (J[0,2,:]*scos(phi_r)*scos(theta_r) + J[1,2,:]*ssin(phi_r)*scos(theta_r) - J[2,2,:]*ssin(theta_r))*ssin(theta_s)).astype(float)
+
+def FJyy_matrix(interaction,Total_types,r,s):
+        
+    rJ=np.where(np.all(Total_types==r,axis=1))[0][0]
+    sJ=np.where(np.all(Total_types==s,axis=1))[0][0]
+    
+    J=interaction[:,:,rJ,sJ,:]
+    
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]    
+    
+    
+    return ((J[0,0,:]*ssin(phi_r) - J[1,0,:]*scos(phi_r))*ssin(phi_s) - (J[0,1,:]*ssin(phi_r) - J[1,1,:]*scos(phi_r))*scos(phi_s)).astype(float)
+
+def FJxy_matrix(interaction,Total_types,r,s):
+        
+    rJ=np.where(np.all(Total_types==r,axis=1))[0][0]
+    sJ=np.where(np.all(Total_types==s,axis=1))[0][0]
+    
+    J=interaction[:,:,rJ,sJ,:]
+    
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]    
+    
+    
+    return -(J[0,0,:]*scos(phi_r)*scos(theta_r) + J[1,0,:]*ssin(phi_r)*scos(theta_r) - J[2,0,:]*ssin(theta_r))*ssin(phi_s) +\
+            (J[0,1,:]*scos(phi_r)*scos(theta_r) + J[1,1,:]*ssin(phi_r)*scos(theta_r) - J[2,1,:]*ssin(theta_r))*scos(phi_s)
+
+def FJyx_matrix(interaction,Total_types,r,s):
+        
+    rJ=np.where(np.all(Total_types==r,axis=1))[0][0]
+    sJ=np.where(np.all(Total_types==s,axis=1))[0][0]
+    
+    J=interaction[:,:,rJ,sJ,:]
+    
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]    
+    
+    return -(J[0,0,:]*ssin(phi_r) - J[1,0,:]*scos(phi_r))*scos(phi_s)*scos(theta_s) -\
+            (J[0,1,:]*ssin(phi_r) - J[1,1,:]*scos(phi_r))*ssin(phi_s)*scos(theta_s) +\
+            (J[0,2,:]*ssin(phi_r) - J[1,2,:]*scos(phi_r))*ssin(theta_s)
+
+##################################
+
+def Fzz_matrix(r,s):
+        
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]
+    
+    SinProd=ssin(theta_r)*ssin(theta_s)
+    CosProd=scos(theta_r)*scos(theta_s)
+    
+    CosDiff=scos(phi_r-phi_s)
+    
+    return float(SinProd*CosDiff + CosProd)
+
+
+def G1_matrix(r,s):
+        
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]
+    
+    SinProd=ssin(theta_r)*ssin(theta_s)
+    CosProd=scos(theta_r)*scos(theta_s)
+    
+    SinDiff=ssin(phi_r-phi_s)
+    CosDiff=scos(phi_r-phi_s)
+    
+    CosPlus=scos(theta_r) + scos(theta_s)
+    
+    return complex(((CosProd + 1)*CosDiff) + SinProd - (1.0j*SinDiff*CosPlus))
+
+
+def G2_matrix(r,s):
+       
+    theta_r = r[1]
+    phi_r = r[2]
+    
+    theta_s = s[1]
+    phi_s = s[2]
+
+    SinProd=ssin(theta_r)*ssin(theta_s)
+    CosProd=scos(theta_r)*scos(theta_s)
+    
+    SinDiff=ssin(phi_r-phi_s)
+    CosDiff=scos(phi_r-phi_s)
+    
+    CosMinus=scos(theta_r) - scos(theta_s)
+    
+    return complex(((CosProd - 1)*CosDiff) + SinProd - (1.0j*SinDiff*CosMinus))
+
+# @numba.njit
+# def get_gamma(pos,r,s,relativeVector,qpts):
+#     Pos_Atom_1 = pos[r]
+#     Pos_Atom_2 = pos[s]+relativeVector
+#     distanceVector = Pos_Atom_2 - Pos_Atom_1
+
+#     gamma = np.empty(qpts.shape[0], dtype=np.complex128)
+
+#     for i in range(qpts.shape[0]):
+#         dot_product = 0.0
+#         for j in range(qpts.shape[1]):
+#             dot_product += qpts[i, j] * (2 * np.pi * distanceVector[j])
+#         gamma[i] = np.exp(-1.0j * dot_product)
+#     #distanceVector[-1] = 0
+#     return gamma
+
+
+def get_gamma(pos, r, s, relativeVector, qpts):
+    Pos_Atom_1 = pos[r]
+    Pos_Atom_2 = pos[s] + relativeVector
+    distanceVector = Pos_Atom_2 - Pos_Atom_1
+
+    dot_products = np.dot(qpts, 2 * np.pi * distanceVector)
+    gamma = np.exp(-1.0j * dot_products)
+
+    return gamma
 
 def Fzz(Atoms,r,s):
         
@@ -363,7 +535,7 @@ def v_matrix_minus(Atoms,r,alpha):
                 [ssin(theta_r)*scos(phi_r),ssin(theta_r)*ssin(phi_r),scos(theta_r)]])
     
     return complex(U[0,alpha] - 1.0j*U[1,alpha])
-@njit
+@numba.njit
 def lorentzian_distribution(energy, energy_ref, thickness):
     """
     Compute the value of the Lorentzian distribution at a given energy.
@@ -377,7 +549,7 @@ def lorentzian_distribution(energy, energy_ref, thickness):
     float: The value of the Lorentzian distribution at the given energy.
     """
     return 1.0 / (np.pi * thickness * (1.0 + ((energy - energy_ref) / thickness) ** 2))
-@njit
+@numba.njit
 def bose_einstein_distribution(energy, chemical_potential, temperature):
     k_ev = 8.617333262145e-2  # Boltzmann constant in mev/K
 
@@ -389,6 +561,7 @@ def bose_einstein_distribution(energy, chemical_potential, temperature):
     distribution = 1 / (np.exp(difference / (k_ev * temperature)) - 1)
 
     return distribution
+
 
 
 class AbstractMagnonInput(metaclass=ABCMeta):
@@ -580,13 +753,13 @@ class MagnonInput(AbstractMagnonInput):
           radius+=step_size
           
           cutoffs = radius * (covalent_radii[self._atoms.numbers]/covalent_radii[self._atoms.numbers])
-          cutoffs_skin = radius * (covalent_radii[self._atoms.numbers]/covalent_radii[self._atoms.numbers])
+          #cutoffs_skin = radius * (covalent_radii[self._atoms.numbers]/covalent_radii[self._atoms.numbers])
           
           nl = NeighborList(cutoffs=cutoffs, self_interaction=False,bothways=True)
-          nl_skin = NeighborList(cutoffs=cutoffs_skin, self_interaction=False,bothways=True)
+          #nl_skin = NeighborList(cutoffs=cutoffs_skin, self_interaction=False,bothways=True)
           
           nl.update(self._atoms)
-          nl_skin.update(self._atoms)
+          #nl_skin.update(self._atoms)
           
           bondpairs = []
           for a in range(len(self._atoms)):
@@ -599,10 +772,18 @@ class MagnonInput(AbstractMagnonInput):
                   List_of_bondpairs.append(len(bondpairs))
                   Lists_of_Neigbours.append(bondpairs)
 
-      ## Remove duplicates            
-                  
+      ## Remove duplicates    
+      # The NeighborList function gives all neighbours that are whithin a sphere of radius given by cutoffs
+      # So each iteration gives 
+      # (First) then (First, Second) then (First, Second,Third) then (First, Second,Third...)
+      # But we want (First), (Second), (Third) ...
+      # So we remove from the last all that are shared by the previous list 
+      # (First, Second,Third) - (First, Second) = (Third)
+
+    
       for i in range(len(List_of_bondpairs)-1,0,-1):
-          t_delete=[]
+          #t_delete = [num for num, bond1 in enumerate(Lists_of_Neigbours[i]) if any(np.array_equal(bond1[2], bond2[2]) and bond1[0]==bond2[0] and bond1[1]==bond2[1] for bond2 in Lists_of_Neigbours[i-1])]
+          t_delete = []
           for num,bond1 in enumerate(Lists_of_Neigbours[i]): 
               for bond2 in Lists_of_Neigbours[i-1]:
                   if bond1[0]==bond2[0] and bond1[1]==bond2[1] and (bond1[2]==bond2[2]).all():
@@ -611,6 +792,128 @@ class MagnonInput(AbstractMagnonInput):
           Lists_of_Neigbours[i]=list(np.delete(np.array(Lists_of_Neigbours[i],dtype=object), t_delete,axis=0))     
 
       return Lists_of_Neigbours
+
+  def Hamiltonian_complete(self,step_size=0.01,Jij=None,hermitian=False,anisotropy=False,debugger=False,badflag=False):
+      
+    if not hasattr(self, 'Lists_of_Neigbours'):
+        self.Lists_of_Neigbours=self.get_neigb(step_size)
+
+    ML=len(self._atoms.positions)
+
+
+    self.list_Distances=[]
+    for num,j in enumerate(self.Lists_of_Neigbours): 
+        for bondpair in j: 
+            self.list_Distances.append(round(self.get_distance(bondpair),3)) 
+   
+
+    self.list_Distances=np.sort(np.array(list(set(self.list_Distances))))
+
+    H_main=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_main1=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_off1=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_off2=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_final=np.zeros([2*ML,2*ML,len(self._qpts)],dtype=complex)
+
+    Total_types=np.unique(self._atoms.get_initial_magnetic_moments(),axis=0)
+
+    Total_typesLen=len(Total_types)
+
+    FJzzM=np.zeros([Total_typesLen,Total_typesLen,len(self.list_Distances)],dtype=complex)
+    FJzzM=np.zeros([Total_typesLen,Total_typesLen,len(self.list_Distances)],dtype=complex)
+    FJyyM=np.zeros([Total_typesLen,Total_typesLen,len(self.list_Distances)],dtype=complex)
+    FJxxM=np.zeros([Total_typesLen,Total_typesLen,len(self.list_Distances)],dtype=complex)
+    FJxyM=np.zeros([Total_typesLen,Total_typesLen,len(self.list_Distances)],dtype=complex)
+    FJyxM=np.zeros([Total_typesLen,Total_typesLen,len(self.list_Distances)],dtype=complex)
+
+    for i in range(len(Total_types)):
+        for j in range(len(Total_types)):
+            FJzzM[i,j,:]=FJzz_matrix(Jij,Total_types,Total_types[i],Total_types[j])
+            FJyyM[i,j,:]=FJyy_matrix(Jij,Total_types,Total_types[i],Total_types[j])
+            FJxxM[i,j,:]=FJxx_matrix(Jij,Total_types,Total_types[i],Total_types[j])
+            FJxyM[i,j,:]=FJxy_matrix(Jij,Total_types,Total_types[i],Total_types[j])
+            FJyxM[i,j,:]=FJyx_matrix(Jij,Total_types,Total_types[i],Total_types[j])
+
+    for numNeib,neibList in enumerate(self.Lists_of_Neigbours):
+        for interaction in neibList:
+
+            self.DistanceInd=np.where(self.list_Distances==round(self.get_distance(interaction),3))[0][0]            
+            
+            r=interaction[0]
+            s=interaction[1]
+
+            Sr=self._atoms.get_initial_magnetic_moments()[r][0]
+            Ss=self._atoms.get_initial_magnetic_moments()[s][0]
+
+            rJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[r]).all(axis=1))[0][0]
+            sJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[s]).all(axis=1))[0][0]          
+
+            Gamma=get_gamma(self._atoms.get_scaled_positions(),interaction[0],interaction[1],interaction[2],self._qpts)
+
+
+            if debugger:
+                print(numNeib,interaction,rJ,sJ,self.DistanceInd,self.list_Distances[self.DistanceInd],self._interaction[rJ,sJ,self.DistanceInd])
+
+            ### H_main
+            H_main[r,r,:]+=Ss*FJzzM[rJ,sJ,self.DistanceInd]
+            H_main[s,s,:]+=Sr*FJzzM[rJ,sJ,self.DistanceInd]
+
+            H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*np.conj(Gamma)*(FJxxM[rJ,sJ,self.DistanceInd] +\
+                                                         1.0j*FJxyM[rJ,sJ,self.DistanceInd] -\
+                                                         1.0j*FJyxM[rJ,sJ,self.DistanceInd] +\
+                                                              FJyyM[rJ,sJ,self.DistanceInd])
+
+            H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*Gamma*(FJxxM[rJ,sJ,self.DistanceInd] -\
+                                                         1.0j*FJxyM[rJ,sJ,self.DistanceInd] +\
+                                                         1.0j*FJyxM[rJ,sJ,self.DistanceInd] +\
+                                                              FJyyM[rJ,sJ,self.DistanceInd])            
+
+            ### H_main1
+            H_main1[r,r,:]+=Ss*FJzzM[rJ,sJ,self.DistanceInd]
+            H_main1[s,s,:]+=Sr*FJzzM[rJ,sJ,self.DistanceInd]
+
+            H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*np.conj(Gamma)*(FJxxM[rJ,sJ,self.DistanceInd] -\
+                                                 1.0j*FJxyM[rJ,sJ,self.DistanceInd] +\
+                                                 1.0j*FJyxM[rJ,sJ,self.DistanceInd] +\
+                                                      FJyyM[rJ,sJ,self.DistanceInd])
+
+            H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*Gamma*(FJxxM[rJ,sJ,self.DistanceInd] +\
+                                                          1.0j*FJxyM[rJ,sJ,self.DistanceInd] -\
+                                                          1.0j*FJyxM[rJ,sJ,self.DistanceInd] +\
+                                                               FJyyM[rJ,sJ,self.DistanceInd])   
+
+            ### H_off1
+            H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*np.conj(Gamma)*(FJxxM[rJ,sJ,self.DistanceInd] +\
+                                                          1.0j*FJxyM[rJ,sJ,self.DistanceInd] +\
+                                                          1.0j*FJyxM[rJ,sJ,self.DistanceInd] -\
+                                                               FJyyM[rJ,sJ,self.DistanceInd])               
+
+            H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*np.conj(Gamma)*(FJxxM[rJ,sJ,self.DistanceInd] +\
+                                                         1.0j*FJxyM[rJ,sJ,self.DistanceInd] +\
+                                                         1.0j*FJyxM[rJ,sJ,self.DistanceInd] +\
+                                                              FJyyM[rJ,sJ,self.DistanceInd])          
+
+            ### H_off2
+            H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*Gamma*(FJxxM[rJ,sJ,self.DistanceInd] -\
+                                                1.0j*FJxyM[rJ,sJ,self.DistanceInd] -\
+                                                1.0j*FJyxM[rJ,sJ,self.DistanceInd] -\
+                                                     FJyyM[rJ,sJ,self.DistanceInd])               
+
+            H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*Gamma*(FJxxM[rJ,sJ,self.DistanceInd] +\
+                                                1.0j*FJxyM[rJ,sJ,self.DistanceInd] +\
+                                                1.0j*FJyxM[rJ,sJ,self.DistanceInd] -\
+                                                     FJyyM[rJ,sJ,self.DistanceInd])  
+
+    if hermitian:
+        H_stack1 = np.hstack((H_main, H_off1))
+        H_stack2 = np.hstack((H_off2, H_main1))
+        H_final = np.vstack((H_stack1, H_stack2))
+    else:
+        H_stack1 = np.hstack((H_main, -H_off1))
+        H_stack2 = np.hstack((H_off2, -H_main1))
+        H_final = np.vstack((H_stack1, H_stack2))
+
+    return H_final/4
 
   def Hamiltonian_Test(self,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
       
@@ -636,6 +939,28 @@ class MagnonInput(AbstractMagnonInput):
 
     Total_types=np.unique(self._atoms.get_initial_magnetic_moments(),axis=0)
 
+    Total_typesLen=len(Total_types)
+
+    FzzM=np.zeros([Total_typesLen,Total_typesLen],dtype=complex)
+    G1M=np.zeros([Total_typesLen,Total_typesLen],dtype=complex)
+    G2M=np.zeros([Total_typesLen,Total_typesLen],dtype=complex)
+
+    for i in range(len(Total_types)):
+        for j in range(len(Total_types)):
+            FzzM[i,j]=Fzz_matrix(Total_types[i],Total_types[j])
+            G1M[i,j]=G1_matrix(Total_types[i],Total_types[j])
+            G2M[i,j]=G2_matrix(Total_types[i],Total_types[j])
+
+
+    #FzzM_conj=np.conj(FzzM)
+    G1M_conj=np.conj(G1M)
+    G2M_conj=np.conj(G1M)
+    # if not self._z_periodic:
+    #     q=np.copy(self._qpts)
+    #     q[:,2]=0
+    # else:
+    #     q=np.copy(self._qpts) 
+
     for numNeib,neibList in enumerate(self.Lists_of_Neigbours):
         for interaction in neibList:
 
@@ -646,41 +971,65 @@ class MagnonInput(AbstractMagnonInput):
 
             Sr=self._atoms.get_initial_magnetic_moments()[r][0]
             Ss=self._atoms.get_initial_magnetic_moments()[s][0]
-
-            FzzM=Fzz(self,r,s)
-            G1M=G1(self,r,s)
-            G2M=G2(self,r,s)
+    
+            # FzzM=Fzz(self,r,s)
+            # G1M=G1(self,r,s)
+            # G2M=G2(self,r,s)
 
             rJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[r]).all(axis=1))[0][0]
             sJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[s]).all(axis=1))[0][0]          
 
-            Gamma=np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction)))
+            #Gamma=np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction)))
+            Gamma=get_gamma(self._atoms.get_scaled_positions(),interaction[0],interaction[1],interaction[2],self._qpts)
+
+            # print(typeof(Gamma))
+            # print(typeof(self._atoms.get_scaled_positions()))
+            # print(typeof(interaction[0]))
+            # print(typeof(interaction[1]))
+            # print(typeof(interaction[2]))
+            # print(typeof(self._qpts))
 
             if debugger:
                 #print(r,s,Gamma[r,s,numNeib,0])
                 print(numNeib,interaction,rJ,sJ,self.DistanceInd,self.list_Distances[self.DistanceInd],self._interaction[rJ,sJ,self.DistanceInd])
 
-            H_main[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
-            H_main[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
+            # H_main[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
+            # H_main[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
 
-            H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*np.conj(G1M) + np.conj(Gamma)*G1M)
+            # H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*np.conj(G1M[rJ,sJ]) + np.conj(Gamma)*G1M[rJ,sJ])
 
-            H_main1[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
-            H_main1[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM
+            # H_main1[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
+            # H_main1[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
 
-            H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*G1M + np.conj(Gamma)*np.conj(G1M))
+            # H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*G1M[rJ,sJ] + np.conj(Gamma)*np.conj(G1M[rJ,sJ]))
 
-            H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*np.conj(G2M) + Gamma*np.conj(G2M))
-            H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*G2M + Gamma*G2M)
+            # H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*np.conj(G2M[rJ,sJ]) + Gamma*np.conj(G2M[rJ,sJ]))
+            # H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*G2M[rJ,sJ] + Gamma*G2M[rJ,sJ])
+
+            H_main[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
+            H_main[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
+
+            H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*G1M_conj[rJ,sJ] + np.conj(Gamma)*G1M[rJ,sJ])
+
+            H_main1[r,r,:]+=Ss*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
+            H_main1[s,s,:]+=Sr*self._interaction[rJ,sJ,self.DistanceInd]*FzzM[rJ,sJ]
+
+            H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(Gamma*G1M[rJ,sJ] + np.conj(Gamma)*G1M_conj[rJ,sJ])
+
+            H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*G2M_conj[rJ,sJ] + Gamma*G2M_conj[rJ,sJ])
+            H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,self.DistanceInd]*(np.conj(Gamma)*G2M[rJ,sJ] + Gamma*G2M[rJ,sJ])
 
     if hermitian:
-        for i in range(len(self._qpts)):
-            H_final[:,:,i]=np.block([[H_main[:,:,i],H_off1[:,:,i]],
-                                    [H_off2[:,:,i],H_main1[:,:,i]]])
+        H_stack1 = np.hstack((H_main, H_off1))
+        H_stack2 = np.hstack((H_off2, H_main1))
+        H_final = np.vstack((H_stack1, H_stack2))
     else:
-        for i in range(len(self._qpts)):
-            H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
-                                    [H_off2[:,:,i],-(H_main1[:,:,i])]])
+        #for i in range(len(self._qpts)):
+        H_stack1 = np.hstack((H_main, -H_off1))
+        H_stack2 = np.hstack((H_off2, -H_main1))
+        H_final = np.vstack((H_stack1, H_stack2))
+            #H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
+            #                        [H_off2[:,:,i],-(H_main1[:,:,i])]])
 
     # if badflag:
     #     return H_final, self.orientationEach
@@ -825,8 +1174,9 @@ class MagnonInput(AbstractMagnonInput):
                                     [H_off2[:,:,i],H_main1[:,:,i]]])
     else:
         for i in range(len(self._qpts)):
+
             H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i]],
-                                    [H_off2[:,:,i],-(H_main1[:,:,i])]])
+                                   [H_off2[:,:,i],-(H_main1[:,:,i])]])
 
     # if badflag:
     #     return H_final, self.orientationEach
@@ -986,7 +1336,7 @@ class MagnonInput(AbstractMagnonInput):
             +  ((np.sqrt((Sr*Ss))/2)*(Gamma*np.conj(G2M)))) 
 
 
-            pprint(H_main[:,:,0])
+            #pprint(H_main[:,:,0])
 
     self.Gamma=Gamma_matrix   
     if hermitian:
@@ -1229,7 +1579,7 @@ class MagnonInput(AbstractMagnonInput):
 
     # Set the number of processors
     os.environ["NUMBA_NUM_THREADS"] = str(num_processors)
-    config.NUMBA_NUM_THREADS = num_processors
+    numba.config.NUMBA_NUM_THREADS = num_processors
 
 
     omegaX=np.linspace(Emin,Emax,Estep,dtype=complex)
@@ -1256,9 +1606,16 @@ class MagnonInput(AbstractMagnonInput):
     A = np.array(self._atoms.get_scaled_positions())
 
     #A = A[A[:, -1].argsort()]
-    #A[:,0] = 0
-    #A[:,1] = 0
+    # A[:,0] = 0
+    # A[:,1] = 0
 #np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(i))
+
+    # if not self._z_periodic:
+    #     q=np.copy(self._qpts)
+    #     q[:,:2]=0
+    # else:
+    #     q=np.copy(self._qpts) 
+
     exp_sum_j = np.exp(-1.0j*np.dot(self._qpts@np.linalg.inv(self._atoms.cell[:]),np.transpose(A)))
     #exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*self._qpts/np.array([a,b,c]),np.transpose(A)))
 
@@ -1279,7 +1636,7 @@ class MagnonInput(AbstractMagnonInput):
 
     #plotValues=(1/(2*len(self._atoms.positions)))*plotValues
 
-    plotValues=(1/(2))*plotValues
+    plotValues=(1/(2*N))*plotValues
 
     return plotValues
 
