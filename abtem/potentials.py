@@ -654,11 +654,13 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         elif isinstance(atoms, AbstractMagnonInput):
             '''If the calculation is of magnons, it is necessary to obtain the eigenvalues and eigenvectors
             '''
+            #self._frozen_phonons = DummyMagnonInput(atoms._atoms_multi)
+
             self._frozen_phonons = DummyMagnonInput(atoms._atoms_multi)
 
             self.unitatoms=atoms._atoms
 
-            self.H, self.orientationEach = atoms.Hamiltonian(badflag=True)
+            self.H, self.orientationEach = atoms.Hamiltonian_Test(badflag=True)
         
             print(np.shape(self.H))
 
@@ -669,8 +671,8 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
                 self.Hk=atoms.HamiltonianK()
                 self.eVals_full,self.eVecs_fullL,self.eVecs_fullR = atoms.diagonalize_function(self.H+self.Hk)
 
-            print(atoms._atoms_multi.positions)
-            print(atoms._atoms.positions)
+            # print(atoms._atoms_multi.positions)
+            # print(atoms._atoms.positions)
 
             self.qpts=atoms._qpts
 
@@ -1068,9 +1070,10 @@ class Potential(AbstractPotentialBuilder, HasDeviceMixin, HasEventMixin):
         #self.slice_thicknesses
         
         import sympy as sym
-        
-        omega=np.linalg.norm(np.cross(self._atoms.cell[:][0], self._atoms.cell[:][1])) * 1e-20# Was in A^2, converted to m^2
-
+        if  self.z_periodic==True:
+            omega= self._atoms.cell.volume * 1e-30# Was in A^3, converted to m^3
+        else:
+            omega=np.linalg.norm(np.cross(self._atoms.cell[:][0], self._atoms.cell[:][1])) * 1e-20
         h= 6.6256E-34                    #planks constant  J*s
         C = 299792458                    #light speed m/s
              
@@ -1478,8 +1481,8 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         #print(self.mag_variables)
 
 
-        omega=np.linalg.norm(np.cross(self.mag_variables.atoms.cell[:][0], self.mag_variables.atoms.cell[:][1])) #* 1e-20# Was in A^2, converted to m^2
-        omegaVol=self.mag_variables.atoms.get_volume()
+        #omega=np.linalg.norm(np.cross(self.mag_variables.atoms.cell[:][0], self.mag_variables.atoms.cell[:][1])) #* 1e-20# Was in A^2, converted to m^2
+        omega=self.mag_variables.atoms.get_volume() * 1e-30
 
         T=self.mag_variables.Temperature
 
@@ -1488,9 +1491,9 @@ class PotentialArray(AbstractPotential, HasGridMixin):
              
         M0 = 9.1091E-31                  #electron mass
         E0 = M0 * C * C                  # Rest energy (Einstein)
-        E = wave.energy * electronCharge # Electron energy in J
+        E = wave.energy * electronCharge # Electron energy in J   eV*1.6*10-19 -> J
 
-        lambd  = (h * C) / np.sqrt((2 * E * E0) + E**2) * 1e10 # Electron Wave lenght in A
+        lambd  = (h * C) / np.sqrt((2 * E * E0) + E**2) * 1E-10 # Electron Wave lenght in m
 
         kT=T*8.6173e-2
 
@@ -1500,15 +1503,18 @@ class PotentialArray(AbstractPotential, HasGridMixin):
         theta1_final=np.zeros_like(wave._array)
         theta2_final=np.zeros_like(wave._array)
 
-        gradientX=np.gradient(wave._array,self.extent[0]* 1e-10/self.gpts[0],axis=0)  # Gradient with pixel size m
-        gradientY=np.gradient(wave._array,self.extent[1]* 1e-10/self.gpts[1],axis=1)  # Gradient with pixel size m
+        gradientX=np.gradient(wave._array,self.extent[0]/self.gpts[0],axis=0)  # Gradient with pixel size A
+        gradientY=np.gradient(wave._array,self.extent[1]/self.gpts[1],axis=1)  # Gradient with pixel size A
 
-        gradientX2=np.gradient(gradientX,self.extent[0]* 1e-10/self.gpts[0],axis=0)  # Gradient with pixel size m
-        gradientY2=np.gradient(gradientY,self.extent[1]* 1e-10/self.gpts[1],axis=1)  # Gradient with pixel size m
+        laplacian_result = ((np.roll(wave._array, 1, axis=0) - 2 * wave._array + np.roll(wave._array, -1, axis=0)) / (self.extent[0]/self.gpts[0])**2 +
+                            (np.roll(wave._array, 1, axis=1) - 2 * wave._array + np.roll(wave._array, -1, axis=1)) / (self.extent[1]/self.gpts[1])**2)
+
+        # gradientX2=np.gradient(gradientX,self.extent[0]/self.gpts[0],axis=0)  # Gradient with pixel size A
+        # gradientY2=np.gradient(gradientY,self.extent[1]/self.gpts[1],axis=1)  # Gradient with pixel size A
 
         ##### Calculate pre-factors
         Nt=self.mag_variables.atoms.get_global_number_of_atoms()/omega # Already in A
-        NtVol=self.mag_variables.atoms.get_global_number_of_atoms()/omegaVol # Already in A
+        NtVol=self.mag_variables.atoms.get_global_number_of_atoms()/omega # Already in A
 
         N=len(self.mag_variables.eVals_full[0,:])//2#len(Input.atoms)
 
@@ -1534,25 +1540,25 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
         deltaz = self._slice_thicknesses[numpot] #self.thickness  ## in A 
 
-        #print(gradientY2)
-
         zperp  =(deltaz*numpot) + deltaz/2  ## Already in A
-        sigmai = (np.pi/(lambd*wave.energy))  ## in 1/[A][eV]
+        sigmai = (2*np.pi*M0*electronCharge*lambd/h**2)#(np.pi/(lambd*wave.energy))  ## in 1/[A][eV]
 
         AArray=np.array([A[0,0,:] + 1.0j*A[0,1,:],A[1,0,:] + 1.0j*A[1,1,:],A[2,0,:] + 1.0j*A[2,1,:]])
 
         Projection1=np.sqrt(self.mag_variables.atoms.get_initial_magnetic_moments()[:,0])   ##np.sqrt(self.mag_variables.orientationEach[:,0])
 
-        
-        for numq,q in enumerate(self.mag_variables.qpts*(1/np.sum(self.mag_variables.atoms.cell,axis=0))): # converting the q to a fraction of wavevector in inverse m    *(1/np.sum(Input.aseatoms.cell,axis=0)*1e-10)
+
+        #for numq,q in enumerate(self.mag_variables.qpts*(1/np.sum(self.mag_variables.atoms.cell,axis=0))): # converting the q to a fraction of wavevector in inverse m    *(1/np.sum(Input.aseatoms.cell,axis=0)*1e-10)
+        #for numq,q in enumerate(TemporaryPath['explicit_kpoints_abs']): # converting the q to a fraction of wavevector in inverse m    *(1/np.sum(Input.aseatoms.cell,axis=0)*1e-10)
+        for numq,q in enumerate(self.mag_variables.qpts*2*np.pi*(1/4)): # converting the q to a fraction of wavevector in inverse m    *(1/np.sum(Input.aseatoms.cell,axis=0)*1e-10)
 
             #print(q,numq)
             
             theta1=np.zeros_like(wave._array)
             theta2=np.zeros_like(wave._array)
 
-            qmag=np.linalg.norm(q[:2]) * 1e-10
-            qmagVol=np.linalg.norm(q[:]) * 1e-10
+            qmag=np.linalg.norm(q[:2])* 1e-10
+            qmagVol=np.linalg.norm(q[:])* 1e-10
             
             #pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmag))*np.sqrt(1/(2*Nt))
             #Projection1=np.exp(1.0j*Input.atoms[:,3].astype(float)*Input.qpts[numq,2])*np.sqrt(Input.MagMoms[:,0])
@@ -1563,7 +1569,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             Nk1 = 1/(np.exp(np.abs(self.mag_variables.eVals_full[numq,:N])/kT)-1)#np.ones_like(1/(np.exp(eigenVals[numq,:]/kT)-1))   
             Nk2 = 1/(np.exp(np.abs(self.mag_variables.eVals_full[numq,N:])/kT)-1)         
             #phase=np.exp(1.0j*zperp*self.mag_variables.qpts[numq,2])
-            phase=np.exp(1.0j*zperp*q[2])
+            #phase=np.exp(1.0j*zperp*q[2])
             
 
             sigmaf = sigmai#np.pi/(((lambd)-(2*np.pi/(qmag)))*(E0))
@@ -1572,7 +1578,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
                 # #### Version 4 ####
                 
-                Aq1 = np.cross(AArray.T,np.array([1.0j*q[0],1.0j*q[1],1.0j*q[2]]))
+                Aq1 = np.cross(AArray.T,np.array([q[0],q[1],q[2]]))
                 
                 # print('AArray.T[:,:2]',AArray.T[:,:2])
                 # print('np.array([q[0],q[1]])',np.array([q[0],q[1]]))
@@ -1586,7 +1592,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
                 pre_factor=((mu0*muB**2)/(np.pi*electronCharge*omega*qmagVol))*np.sqrt(1/(2*NtVol))
                 
                 sqrt_Nk = np.sqrt(Nk1)
-                sqrt_Nk_plus_1 = np.sqrt(Nk2 + 1)
+                sqrt_Nk_plus_1 = np.sqrt(Nk1 + 1)
 
                 # print('Nk1',Nk1)
                 # print('Nk2',Nk2)
@@ -1598,13 +1604,13 @@ class PotentialArray(AbstractPotential, HasGridMixin):
                 #print(np.shape(Aq1))
                 #print(np.shape(sqrt_Nk_plus_1))
 
-                Projection2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk*Aq1[:,2]))
+                Projection2 = (self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,2]))
                 
-                Projection2_0 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,0]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk*Aq1[:,0]))
+                Projection2_0 = (self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,0]) + self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,0]))
                 
-                Projection2_1 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,1]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk*Aq1[:,1]))
+                Projection2_1 = (self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,1]) + self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,1]))
 
-                Projection2_2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk*Aq1[:,2]))
+                Projection2_2 = (self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,2]))
 
                 #print(np.shape(Projection2_0),np.shape(Projection1))
 
@@ -1614,9 +1620,9 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
                 theta1+=(Projection2_1@Projection1)*gradientY
 
-                theta1+=(Projection2_2@Projection1)*((1.0j*lambd*1e-10)/(4*np.pi))*(gradientX2+gradientY2)  #Lambd is converted back to m here
+                theta1+=(Projection2_2@Projection1)*((1.0j*lambd)/(4*np.pi))*laplacian_result#(gradientX2+gradientY2)  #Lambd is converted back to m here
 
-                theta1*=sigmaf*deltaz*pre_factor
+                theta1*=1.0j*sigmaf*deltaz*pre_factor
                                 
 
                 #print('deltaz',deltaz)
@@ -1652,7 +1658,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
             if flag_theta2:         
                 wave._array=theta2_final
             if flag_theta1 and flag_theta2:
-                wave._array=theta1_final+theta2_final 
+                wave._array=theta1_final+theta2_final
 
 
             else:
@@ -1671,13 +1677,13 @@ class PotentialArray(AbstractPotential, HasGridMixin):
                 sqrt_Nk = np.sqrt(Nk1)
                 sqrt_Nk_plus_1 = np.sqrt(Nk2 + 1)
 
-                Projection2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq2) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq2))
+                Projection2 = (self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq2) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq2))
                 
-                Projection2_0 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq1[:,0]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,0]))
+                Projection2_0 = (self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,0]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,0]))
                 
-                Projection2_1 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq1[:,1]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,1]))
+                Projection2_1 = (self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,1]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,1]))
 
-                Projection2_2 = (self.mag_variables.eVecs_fullR[:N, N:, numq]@(sqrt_Nk*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]))
+                Projection2_2 = (self.mag_variables.eVecs_fullR[N:, :N, numq]@(sqrt_Nk*Aq1[:,2]) + self.mag_variables.eVecs_fullR[N:, N:, numq]@(sqrt_Nk_plus_1*Aq1[:,2]))
 
                 #print(np.shape(Projection2_0),np.shape(Projection1))
 
@@ -1689,7 +1695,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
 
                 theta1+=(Projection2_2@Projection1)*((1.0j*lambd*1e-10)/(4*np.pi))*(gradientX2+gradientY2)  #Lambd is converted back to m here
 
-                theta1*=sigmaf*phase*deltaz*pre_factor
+                theta1*=sigmaf*deltaz*pre_factor
                                 
 
                 #print('deltaz',deltaz)
@@ -1697,7 +1703,7 @@ class PotentialArray(AbstractPotential, HasGridMixin):
                 #print('sigmaf',sigmaf)
                 #print('phase',phase)
                 #print('pre_factor',pre_factor)
-                theta2-=sigmai*sigmaf*phase*(Projection2@Projection1)*pre_factor*potential[0,:,:]*wave._array
+                theta2-=sigmai*sigmaf*(Projection2@Projection1)*pre_factor*potential[0,:,:]*wave._array
 
                 #### Version 1 ####
                 # for MN in range(N):

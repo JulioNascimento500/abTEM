@@ -792,6 +792,7 @@ class VortexBeam(_WavesLike):
         self._winding_num=winding_num
         self._semiangle_cutoff=semiangle_cutoff
 
+
     def multislice(self,
                    potential: Union[AbstractPotential, Atoms],
                    pbar: bool = True,
@@ -882,8 +883,8 @@ class VortexBeam(_WavesLike):
 
         psi_probe = 2*np.pi*((1.0j)**vortex)*np.exp(1.0j*vortex*phase)*f(Rdist)
 
-        temp= psi_probe*np.conj(psi_probe)
-        norm=np.sum(np.sum(temp))*((pixelX)**2)
+        #psi_probe= psi_probe*np.conj(psi_probe)
+        norm=np.sum(np.sum(psi_probe))*((pixelX)**2)
 
         array=psi_probe/np.sqrt(norm)        
          
