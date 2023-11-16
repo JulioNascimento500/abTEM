@@ -1186,7 +1186,7 @@ class MagnonInput(AbstractMagnonInput):
 
     return H_final/4
 
-  def Hamiltonian_Test(self,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False):
+  def Hamiltonian_Test(self,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False,flagQ=True):
       
     if not hasattr(self, 'Lists_of_Neigbours'):
         self.Lists_of_Neigbours=self.get_neigb(step_size)
@@ -1280,7 +1280,13 @@ class MagnonInput(AbstractMagnonInput):
             #Gamma=np.exp(-1.0j*np.dot(self._qpts,2*np.pi*self.get_distance_vector_scaled(interaction)))
             # q=np.copy(self._qpts)
             # q[:,2]=0
-            Gamma=get_gamma(self._atoms.get_scaled_positions(),interaction[0],interaction[1],interaction[2],2.0*np.pi*q)
+            
+            if flagQ:
+                Gamma=get_gamma(self._atoms.get_scaled_positions(),interaction[0],interaction[1],interaction[2],2.0*np.pi*q)
+            else:
+                Gamma=get_gamma(self._atoms.positions,interaction[0],interaction[1],np.matmul(self._atoms.cell[:],interaction[2]),q)
+            
+            
 
             #Gamma=get_gamma(self._atoms.positions,interaction[0],interaction[1],interaction[2]@self._atoms.cell[:],(2*np.pi*q)@np.linalg.inv(self._atoms.cell[:]))
 
@@ -1348,6 +1354,132 @@ class MagnonInput(AbstractMagnonInput):
 
     # Very important here to note that this way the eigenvalues will be twice what it should be,
     # the eigenvalues will then have the right value for the energies.
+    
+    if badflag:
+        return H_final/4, self.orientationEach
+    else:
+        return H_final/4
+
+  def Hamiltonian_YIG(self,step_size=0.01,hermitian=False,anisotropy=False,debugger=False,badflag=False,flagQ=True):
+      
+    if not hasattr(self, 'Lists_of_Neigbours'):
+        self.Lists_of_Neigbours=self.get_neigb(step_size)
+
+    ML=len(self._atoms.positions)
+
+    if badflag:
+        self.zNum=self._atoms.get_scaled_positions()[:,2]
+        self.zNum=[float(i) for i in self.zNum]
+        self.N_dict = {i:list(self.zNum).count(i) for i in self.zNum}
+        self.zNum=np.array([*sorted(set(self.zNum))])
+
+        LayersDictionary={}
+        for i in range(len(self.zNum)):
+            LayersDictionary[i]=np.array([])
+
+        for num,i in enumerate(self._atoms.get_scaled_positions()):
+            Temp=np.where((self.zNum==float(i[-1])))[0][0]
+            LayersDictionary[Temp]=np.append(LayersDictionary[Temp],self._atoms.get_initial_magnetic_moments()[num])
+
+        for i in range(len(self.zNum)):
+            Term1=LayersDictionary[i]
+            LayersDictionary[i]=np.reshape(Term1,(len(Term1)//3,3))
+            LayersDictionary[i]=np.unique(LayersDictionary[i], axis=0)
+
+
+        self.orientationEach = np.array([LayersDictionary[i][j] for i in LayersDictionary.keys() for j,value in enumerate(LayersDictionary[i])])
+
+    self.list_Distances=[]
+    for num,j in enumerate(self.Lists_of_Neigbours): 
+        for bondpair in j: 
+            self.list_Distances.append(round(self.get_distance(bondpair),2)) 
+   
+
+    self.list_Distances=np.sort(np.array(list(set(self.list_Distances))))
+
+
+    H_main=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_main1=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_off1=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_off2=np.zeros([ML,ML,len(self._qpts)],dtype=complex)
+    H_final=np.zeros([2*ML,2*ML,len(self._qpts)],dtype=complex)
+
+    Total_types=np.unique(self._atoms.get_initial_magnetic_moments(),axis=0)
+
+    Total_typesLen=len(Total_types)
+
+    FzzM=np.zeros([Total_typesLen,Total_typesLen],dtype=complex)
+    G1M=np.zeros([Total_typesLen,Total_typesLen],dtype=complex)
+    G2M=np.zeros([Total_typesLen,Total_typesLen],dtype=complex)
+
+    for i in range(len(Total_types)):
+        for j in range(len(Total_types)):
+            FzzM[i,j]=Fzz_matrix(Total_types[i],Total_types[j])
+            G1M[i,j]=G1_matrix(Total_types[i],Total_types[j])
+            G2M[i,j]=G2_matrix(Total_types[i],Total_types[j])
+
+
+    #FzzM_conj=np.conj(FzzM)
+    G1M_conj=np.conj(G1M)
+    G2M_conj=np.conj(G2M)
+    if not self._z_periodic:
+        q=np.copy(self._qpts)
+        q[:,2]=0
+    else:
+        q=np.copy(self._qpts) 
+
+    for numNeib,neibList in enumerate(self.Lists_of_Neigbours):
+        for interaction in neibList:
+
+            flagMultiInter=0
+
+            self.DistanceInd=np.where(self.list_Distances==round(self.get_distance(interaction),2))[0][0]            
+
+
+
+            r=interaction[0]#
+            s=interaction[1]
+
+            Sr=self._atoms.get_initial_magnetic_moments()[r][0]
+            Ss=self._atoms.get_initial_magnetic_moments()[s][0]
+
+            rJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[r]).all(axis=1))[0][0]
+            sJ=np.where((Total_types==self._atoms.get_initial_magnetic_moments()[s]).all(axis=1))[0][0]          
+            
+            if flagQ:
+                Gamma=get_gamma(self._atoms.get_scaled_positions(),interaction[0],interaction[1],interaction[2],2.0*np.pi*q)
+            else:
+                Gamma=get_gamma(self._atoms.positions,interaction[0],interaction[1],np.matmul(self._atoms.cell[:],interaction[2]),q)
+
+            A=self._atoms.get_scaled_positions()[interaction[0]]
+            B=self._atoms.get_scaled_positions()[interaction[1]]
+            if (np.all(((B+interaction[2])-A) > 0) or np.all(((B+interaction[2])-A) < 0)) and self.DistanceInd==2:
+                flagMultiInter=1
+
+            H_main[r,r,:]+=Ss*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*FzzM[rJ,sJ]
+            H_main[s,s,:]+=Sr*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*FzzM[rJ,sJ]
+
+            H_main[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*(Gamma*G1M_conj[rJ,sJ] + np.conj(Gamma)*G1M[rJ,sJ])
+
+            H_main1[r,r,:]+=Ss*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*FzzM[rJ,sJ]
+            H_main1[s,s,:]+=Sr*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*FzzM[rJ,sJ]
+
+            H_main1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*(Gamma*G1M[rJ,sJ] + np.conj(Gamma)*G1M_conj[rJ,sJ])
+
+            H_off1[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*(np.conj(Gamma)*G2M_conj[rJ,sJ] + Gamma*G2M_conj[rJ,sJ])
+            H_off2[r,s,:]-=(np.sqrt(Sr*Ss)/2)*self._interaction[rJ,sJ,flagMultiInter,self.DistanceInd]*(np.conj(Gamma)*G2M[rJ,sJ] + Gamma*G2M[rJ,sJ])
+
+            ###################
+
+    if hermitian:
+        H_stack1 = np.hstack((H_main, H_off1))
+        H_stack2 = np.hstack((H_off2, H_main1))
+        H_final = np.vstack((H_stack1, H_stack2))
+    else:
+        for i in range(len(self._qpts)):
+            H_final[:,:,i]=np.block([[H_main[:,:,i],-H_off1[:,:,i] ],
+                                     [H_off2[:,:,i],-H_main1[:,:,i]]])
+
     
     if badflag:
         return H_final/4, self.orientationEach
@@ -1986,7 +2118,7 @@ class MagnonInput(AbstractMagnonInput):
 
     return SpinSpin
   
-  def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,TempFlag=True,num_processors=1,LDOS=False,reorder=True):
+  def spin_scattering_function_film(self,H,Emax=100,Emin=-100,Estep=1000,Direction='xx',broadening=0.1,TempFlag=True,num_processors=1,LDOS=False,reorder=True,flagQ=True):
     
 
     self.zNum=self._atoms.get_scaled_positions()[:,2]
@@ -2069,8 +2201,18 @@ class MagnonInput(AbstractMagnonInput):
 
         #print(Magmom_temp[[self.indexes[i,:]]])
     #print(np.shape(Vplus))
+
     #A = np.array(self._atoms.positions)
-    A = self._atoms.get_scaled_positions()
+    #A = self._atoms.get_scaled_positions()
+
+    if flagQ:
+        A = self._atoms.get_scaled_positions()
+        exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*q,np.transpose(A)))
+    else:
+        A = np.array(self._atoms.positions)
+        exp_sum_j = np.exp(-1.0j*np.dot(q,np.transpose(A)))
+    
+
 
     #A[:,2] = A[:,2]-np.max(A[:,2])/2
     #A = np.vstack((self._atoms.get_scaled_positions(),self._atoms.get_scaled_positions()))
@@ -2081,7 +2223,8 @@ class MagnonInput(AbstractMagnonInput):
     #for i,locq in enumerate(q):
     #    exp_sum_j = np.vstack((exp_sum_j,np.exp(-1.0j*np.dot(2*np.pi*locq,np.transpose(A[A.argsort()[::1]])))))
 
-    exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*q,np.transpose(A)))
+    #exp_sum_j = np.exp(-1.0j*np.dot(2*np.pi*q,np.transpose(A)))
+    #exp_sum_j = np.exp(-1.0j*np.dot(q,np.transpose(A)))
 
     # if not self._z_periodic:    
         

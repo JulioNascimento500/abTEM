@@ -143,14 +143,14 @@ def _multislice(waves: Union['Waves', 'SMatrixArray'],
                         #print(potential.eVals_full)
                         #print(waves._array)
                         #print(potential.mag_variables.inelastic_layer)
-                        
+                        waves = t.transmit(waves)
+                        waves = propagator.propagate(waves, t.thickness)                        
                         if start==current_inelastic:
                             #print(current_inelastic)
                             #print(type(p))
                             #print(type(potential))
                             waves = potential.magnon_inelastic(waves,current_inelastic)
-                        waves = t.transmit(waves)
-                        waves = propagator.propagate(waves, t.thickness)
+
 
                         
                     pbar.update(1)
